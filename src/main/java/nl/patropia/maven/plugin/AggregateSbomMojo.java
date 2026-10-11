@@ -173,7 +173,7 @@ public class AggregateSbomMojo extends AbstractMojo {
         writeBomToFile(mergedBom, outputFile);
     }
 
-    private Bom mergeBoms(List<Bom> boms) {
+    Bom mergeBoms(List<Bom> boms) {
         Bom masterBom = new Bom();
         List<org.cyclonedx.model.Component> allComponents = new ArrayList<>();
         List<Dependency> allDependencies = new ArrayList<>();
