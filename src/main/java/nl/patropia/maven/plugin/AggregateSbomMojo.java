@@ -15,9 +15,8 @@ import org.cyclonedx.generators.BomGeneratorFactory;
 import org.cyclonedx.generators.json.BomJsonGenerator;
 import org.cyclonedx.generators.xml.BomXmlGenerator;
 import org.cyclonedx.model.Bom;
-import org.cyclonedx.parsers.BomParserFactory;
+import org.cyclonedx.model.Dependency;
 import org.cyclonedx.parsers.Parser;
-import org.cyclonedx.util.BomUtils;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.artifact.Artifact;
@@ -68,7 +67,7 @@ public class AggregateSbomMojo extends AbstractMojo {
     private String sbomExtension;
 
     /**
-     * Spec version to target (e.g., "1.4", "1.5", "1.6").
+     * Spec version to target (e.g., "1.4", "1.5", "1.6", "1.7").
      */
     @Parameter(property = "specVersion", defaultValue = "1.5")
     private String specVersion;
@@ -142,11 +141,11 @@ public class AggregateSbomMojo extends AbstractMojo {
             return;
         }
 
-        // 3. Parse and Merge BOMs in-memory
+        // 3. Parse and Merge BOMs using the v13 parser API
         List<Bom> boms = new ArrayList<>();
+        Parser parser = new Parser();
         for (File file : sbomFilesToMerge) {
             try {
-                Parser parser = BomParserFactory.createParser(file);
                 Bom parsedBom = parser.parse(file);
                 if (parsedBom != null) {
                     boms.add(parsedBom);
@@ -158,11 +157,35 @@ public class AggregateSbomMojo extends AbstractMojo {
         }
 
         getLog().info("Merging " + boms.size() + " BOMs in-memory...");
-        Bom mergedBom = BomUtils.merge(boms);
+        Bom mergedBom = mergeBoms(boms);
 
-        // 4. Serialize and output merged SBOM
+        // 4. Serialize and output merged BOM
         File outputFile = new File(outputDirectory, "aggregated-bom." + sbomExtension);
         writeBomToFile(mergedBom, outputFile);
+    }
+
+    private Bom mergeBoms(List<Bom> boms) {
+        Bom masterBom = new Bom();
+        List<org.cyclonedx.model.Component> allComponents = new ArrayList<>();
+        List<Dependency> allDependencies = new ArrayList<>();
+
+        for (Bom bom : boms) {
+            if (bom.getComponents() != null) {
+                allComponents.addAll(bom.getComponents());
+            }
+            if (bom.getDependencies() != null) {
+                allDependencies.addAll(bom.getDependencies());
+            }
+        }
+
+        if (!allComponents.isEmpty()) {
+            masterBom.setComponents(allComponents);
+        }
+        if (!allDependencies.isEmpty()) {
+            masterBom.setDependencies(allDependencies);
+        }
+
+        return masterBom;
     }
 
     private void writeBomToFile(Bom bom, File outputFile) throws MojoExecutionException {
@@ -191,10 +214,10 @@ public class AggregateSbomMojo extends AbstractMojo {
 
     private Version parseVersion(String versionStr) {
         switch (versionStr) {
+            case "1.7": return Version.VERSION_17;
             case "1.6": return Version.VERSION_16;
             case "1.4": return Version.VERSION_14;
             case "1.3": return Version.VERSION_13;
-            case "1.7": return Version.VERSION_17;
             case "1.5":
             default: return Version.VERSION_15;
         }
