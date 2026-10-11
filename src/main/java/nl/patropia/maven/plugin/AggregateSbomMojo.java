@@ -16,7 +16,8 @@ import org.cyclonedx.generators.json.BomJsonGenerator;
 import org.cyclonedx.generators.xml.BomXmlGenerator;
 import org.cyclonedx.model.Bom;
 import org.cyclonedx.model.Dependency;
-import org.cyclonedx.parsers.Parser;
+import org.cyclonedx.parsers.JsonParser;
+import org.cyclonedx.parsers.XmlParser;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.artifact.Artifact;
@@ -141,12 +142,20 @@ public class AggregateSbomMojo extends AbstractMojo {
             return;
         }
 
-        // 3. Parse and Merge BOMs using the v13 parser API
+        // 3. Parse and Merge BOMs using JsonParser or XmlParser
         List<Bom> boms = new ArrayList<>();
-        Parser parser = new Parser();
+        JsonParser jsonParser = new JsonParser();
+        XmlParser xmlParser = new XmlParser();
+
         for (File file : sbomFilesToMerge) {
             try {
-                Bom parsedBom = parser.parse(file);
+                Bom parsedBom;
+                if (file.getName().toLowerCase().endsWith(".xml")) {
+                    parsedBom = xmlParser.parse(file);
+                } else {
+                    parsedBom = jsonParser.parse(file);
+                }
+
                 if (parsedBom != null) {
                     boms.add(parsedBom);
                 }
