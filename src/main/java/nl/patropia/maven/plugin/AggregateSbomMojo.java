@@ -1,4 +1,4 @@
-package com.example.maven.plugin;
+package nl.patropia.maven.plugin;
 
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.plugin.AbstractMojo;
@@ -10,7 +10,7 @@ import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.plugins.annotations.ResolutionScope;
 import org.apache.maven.project.MavenProject;
-import org.cyclonedx.CycloneDxSchema;
+import org.cyclonedx.Version;
 import org.cyclonedx.generators.BomGeneratorFactory;
 import org.cyclonedx.generators.json.BomJsonGenerator;
 import org.cyclonedx.generators.xml.BomXmlGenerator;
@@ -27,7 +27,6 @@ import org.eclipse.aether.resolution.ArtifactResult;
 
 import java.io.File;
 import java.io.FileWriter;
-
 import java.util.ArrayList;
 import java.util.List;
 
@@ -161,7 +160,7 @@ public class AggregateSbomMojo extends AbstractMojo {
         getLog().info("Merging " + boms.size() + " BOMs in-memory...");
         Bom mergedBom = BomUtils.merge(boms);
 
-        // 4. Serialize and output merged BOM
+        // 4. Serialize and output merged SBOM
         File outputFile = new File(outputDirectory, "aggregated-bom." + sbomExtension);
         writeBomToFile(mergedBom, outputFile);
     }
@@ -171,7 +170,7 @@ public class AggregateSbomMojo extends AbstractMojo {
             outputDirectory.mkdirs();
         }
 
-        CycloneDxSchema.Version targetVersion = parseVersion(specVersion);
+        Version targetVersion = parseVersion(specVersion);
 
         try (FileWriter writer = new FileWriter(outputFile)) {
             String bomContent;
@@ -190,13 +189,14 @@ public class AggregateSbomMojo extends AbstractMojo {
         }
     }
 
-    private CycloneDxSchema.Version parseVersion(String versionStr) {
+    private Version parseVersion(String versionStr) {
         switch (versionStr) {
-            case "1.6": return CycloneDxSchema.Version.VERSION_16;
-            case "1.4": return CycloneDxSchema.Version.VERSION_14;
-            case "1.3": return CycloneDxSchema.Version.VERSION_13;
+            case "1.6": return Version.VERSION_16;
+            case "1.4": return Version.VERSION_14;
+            case "1.3": return Version.VERSION_13;
+            case "1.7": return Version.VERSION_17;
             case "1.5":
-            default: return CycloneDxSchema.Version.VERSION_15;
+            default: return Version.VERSION_15;
         }
     }
 }
