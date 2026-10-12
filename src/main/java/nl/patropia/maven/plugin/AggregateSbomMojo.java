@@ -190,7 +190,7 @@ public class AggregateSbomMojo extends AbstractMojo {
 
         List<org.cyclonedx.model.Component> allComponents = new ArrayList<>();
         List<Dependency> allDependencies = new ArrayList<>();
-        List<String> rootRefDependsOn = new ArrayList<>();
+        List<Dependency> childDependencies = new ArrayList<>();
 
         // Add components and dependency trees from successfully parsed SBOMs
         for (Bom bom : parsedBoms) {
@@ -218,7 +218,6 @@ public class AggregateSbomMojo extends AbstractMojo {
                 missingComp.setPurl(String.format("pkg:maven/%s/%s@%s", g, a, v));
                 
                 allComponents.add(missingComp);
-                rootRefDependsOn.add(missingComp.getPurl());
             }
         }
 
@@ -226,10 +225,10 @@ public class AggregateSbomMojo extends AbstractMojo {
         Dependency rootDependency = new Dependency(rootComponent.getPurl());
         for (org.cyclonedx.model.Component c : allComponents) {
             if (c.getPurl() != null) {
-                rootRefDependsOn.add(c.getPurl());
+                childDependencies.add(new Dependency(c.getPurl()));
             }
         }
-        rootDependency.setDependencies(rootRefDependsOn);
+        rootDependency.setDependencies(childDependencies);
         allDependencies.add(rootDependency);
 
         masterBom.setComponents(allComponents);
