@@ -11,6 +11,7 @@ import java.io.FileWriter;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -47,7 +48,7 @@ class AggregateSbomMojoTest {
         Bom parsedUpstreamBom = parser.parse(bomFile1);
 
         // 3. Define a dependency missing an SBOM
-        java.util.List<String> missingDeps = Collections.singletonList("com.unhappy:missing-lib:3.0.0");
+        List<String> missingDeps = Collections.singletonList("com.unhappy:missing-lib:3.0.0");
 
         // 4. Test Mojo's hierarchical merge logic
         AggregateSbomMojo mojo = new AggregateSbomMojo();
