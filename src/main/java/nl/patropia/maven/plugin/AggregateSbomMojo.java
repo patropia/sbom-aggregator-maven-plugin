@@ -16,6 +16,7 @@ import org.cyclonedx.generators.json.BomJsonGenerator;
 import org.cyclonedx.generators.xml.BomXmlGenerator;
 import org.cyclonedx.model.Bom;
 import org.cyclonedx.model.Dependency;
+import org.cyclonedx.model.Metadata;
 import org.cyclonedx.parsers.JsonParser;
 import org.cyclonedx.parsers.XmlParser;
 import org.eclipse.aether.RepositorySystem;
@@ -142,7 +143,7 @@ public class AggregateSbomMojo extends AbstractMojo {
             return;
         }
 
-        // 3. Parse and Merge BOMs using JsonParser or XmlParser
+        // 3. Parse BOMs using JsonParser or XmlParser
         List<Bom> boms = new ArrayList<>();
         JsonParser jsonParser = new JsonParser();
         XmlParser xmlParser = new XmlParser();
@@ -165,20 +166,34 @@ public class AggregateSbomMojo extends AbstractMojo {
             }
         }
 
-        getLog().info("Merging " + boms.size() + " BOMs in-memory...");
-        Bom mergedBom = mergeBoms(boms);
+        getLog().info("Merging " + boms.size() + " BOMs hierarchically in-memory...");
+        Bom mergedBom = mergeBoms(project, boms, missingSboms);
 
         // 4. Serialize and output merged BOM
         File outputFile = new File(outputDirectory, "aggregated-bom." + sbomExtension);
         writeBomToFile(mergedBom, outputFile);
     }
 
-    Bom mergeBoms(List<Bom> boms) {
+    Bom mergeBoms(MavenProject mavenProject, List<Bom> parsedBoms, List<String> missingDepsCoords) {
         Bom masterBom = new Bom();
+
+        // 1. Establish Root Project Metadata & Component
+        Metadata metadata = new Metadata();
+        org.cyclonedx.model.Component rootComponent = new org.cyclonedx.model.Component();
+        rootComponent.setType(org.cyclonedx.model.Component.Type.APPLICATION);
+        rootComponent.setGroup(mavenProject.getGroupId());
+        rootComponent.setName(mavenProject.getArtifactId());
+        rootComponent.setVersion(mavenProject.getVersion());
+        rootComponent.setPurl(String.format("pkg:maven/%s/%s@%s", mavenProject.getGroupId(), mavenProject.getArtifactId(), mavenProject.getVersion()));
+        metadata.setComponent(rootComponent);
+        masterBom.setMetadata(metadata);
+
         List<org.cyclonedx.model.Component> allComponents = new ArrayList<>();
         List<Dependency> allDependencies = new ArrayList<>();
+        List<String> rootRefDependsOn = new ArrayList<>();
 
-        for (Bom bom : boms) {
+        // Add components and dependency trees from successfully parsed SBOMs
+        for (Bom bom : parsedBoms) {
             if (bom.getComponents() != null) {
                 allComponents.addAll(bom.getComponents());
             }
@@ -187,12 +202,38 @@ public class AggregateSbomMojo extends AbstractMojo {
             }
         }
 
-        if (!allComponents.isEmpty()) {
-            masterBom.setComponents(allComponents);
+        // 2. Handle dependencies that DO NOT provide an SBOM (create fallback components)
+        for (String missingCoord : missingDepsCoords) {
+            String[] parts = missingCoord.split(":");
+            if (parts.length >= 3) {
+                String g = parts[0];
+                String a = parts[1];
+                String v = parts[2];
+
+                org.cyclonedx.model.Component missingComp = new org.cyclonedx.model.Component();
+                missingComp.setType(org.cyclonedx.model.Component.Type.LIBRARY);
+                missingComp.setGroup(g);
+                missingComp.setName(a);
+                missingComp.setVersion(v);
+                missingComp.setPurl(String.format("pkg:maven/%s/%s@%s", g, a, v));
+                
+                allComponents.add(missingComp);
+                rootRefDependsOn.add(missingComp.getPurl());
+            }
         }
-        if (!allDependencies.isEmpty()) {
-            masterBom.setDependencies(allDependencies);
+
+        // 3. Construct explicit dependency tree wiring for the root component
+        Dependency rootDependency = new Dependency(rootComponent.getPurl());
+        for (org.cyclonedx.model.Component c : allComponents) {
+            if (c.getPurl() != null) {
+                rootRefDependsOn.add(c.getPurl());
+            }
         }
+        rootDependency.setDependencies(rootRefDependsOn);
+        allDependencies.add(rootDependency);
+
+        masterBom.setComponents(allComponents);
+        masterBom.setDependencies(allDependencies);
 
         return masterBom;
     }
