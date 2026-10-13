@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.4" version="1">
+    <metadata>
+        <component type="application">
+            <name>xml-format-test</name>
+            <version>1.0.0-SNAPSHOT</version>
+            <purl>pkg:maven/nl.patropia.it/xml-format-test@1.0.0-SNAPSHOT</purl>
+        </component>
+    </metadata>
+    <components>
+        <component type="library">
+            <name>xml-test-component</name>
+            <version>1.0.0</version>
+            <purl>pkg:maven/nl.patropia.it/xml-test-component@1.0.0</purl>
+        </component>
+    </components>
+</bom>

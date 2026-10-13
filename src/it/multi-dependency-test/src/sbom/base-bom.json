@@ -1,0 +1,22 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:multi-dep-test-uuid",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "multi-dependency-test",
+      "version": "1.0.0-SNAPSHOT",
+      "purl": "pkg:maven/nl.patropia.it/multi-dependency-test@1.0.0-SNAPSHOT"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "internal-component",
+      "version": "2.0.0",
+      "purl": "pkg:maven/nl.patropia.it/internal-component@2.0.0"
+    }
+  ]
+}
