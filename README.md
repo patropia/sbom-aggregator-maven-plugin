@@ -1,6 +1,7 @@
 # SBOM Aggregator Maven Plugin
 
 [![CI](https://github.com/patropia/sbom-aggregator-maven-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/patropia/sbom-aggregator-maven-plugin/actions/workflows/ci.yml)
+[![Maven Central](https://img.shields.io/maven-central/v/nl.patropia.maven.plugin/sbom-aggregator-maven-plugin.svg?label=Maven%20Central)](https://search.maven.org/search?q=g:%22nl.patropia.maven.plugin%22%20AND%20a:%22sbom-aggregator-maven-plugin%22)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0.txt)
 
 A Maven plugin designed for Software Composition Analysis (SCA) in large multi-repository software projects. It aggregates CycloneDX Software Bill of Materials (SBOMs) from dependent projects in-memory, maintains hierarchical traceability, and provides visibility into dependencies that fail to supply an SBOM.
@@ -31,7 +32,7 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
 <plugin>
     <groupId>nl.patropia.maven.plugin</groupId>
     <artifactId>sbom-aggregator-maven-plugin</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.0.0</version>
     <executions>
         <execution>
             <phase>verify</phase>
@@ -92,7 +93,75 @@ To ensure upstream repositories publish their SBOMs correctly so this plugin can
 
 ---
 
+## Quick Start Example
+
+Here's a complete example showing how to use this plugin in a multi-module project:
+
+```xml
+<project>
+    <!-- ... -->
+    <build>
+        <plugins>
+            <!-- First, generate your project's base SBOM -->
+            <plugin>
+                <groupId>org.cyclonedx</groupId>
+                <artifactId>cyclonedx-maven-plugin</artifactId>
+                <version>2.8.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>makeAggregateBom</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <outputFormat>json</outputFormat>
+                    <outputName>bom</outputName>
+                </configuration>
+            </plugin>
+            
+            <!-- Then aggregate with dependencies' SBOMs -->
+            <plugin>
+                <groupId>nl.patropia.maven.plugin</groupId>
+                <artifactId>sbom-aggregator-maven-plugin</artifactId>
+                <version>1.0.0</version>
+                <executions>
+                    <execution>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>aggregate-sboms</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+After running `mvn verify`, you'll find the aggregated SBOM at `target/aggregated-bom.json`.
+
+---
+
 ## Building and Testing
+
+### Prerequisites
+
+Install Maven if not already available:
+
+```bash
+# On Debian/Ubuntu
+apt-get install maven
+
+# On macOS
+brew install maven
+
+# On Termux (Android)
+pkg install maven
+```
+
+### Build Commands
 
 To compile the plugin and run the integration tests locally:
 
@@ -100,14 +169,48 @@ To compile the plugin and run the integration tests locally:
 mvn clean verify -Prun-its
 ```
 
-To run quick unit tests:
+To run quick unit tests only:
 
 ```bash
 mvn test
 ```
+
+To install the plugin locally for testing in other projects:
+
+```bash
+mvn clean install
+```
+
+---
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+---
+
+## Roadmap
+
+- [ ] Support for transitive dependency SBOM resolution
+- [ ] Enhanced vulnerability correlation across aggregated components
+- [ ] SBOM diff reporting between versions
+- [ ] Support for SPDX format in addition to CycloneDX
 
 ---
 
 ## License
 
 Distributed under the **Apache License 2.0**. See `LICENSE` for more information.
+
+---
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/patropia/sbom-aggregator-maven-plugin/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/patropia/sbom-aggregator-maven-plugin/discussions)
