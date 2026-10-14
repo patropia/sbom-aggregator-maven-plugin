@@ -60,22 +60,32 @@ public class AggregateSbomMojo extends AbstractMojo {
     /**
      * Classifiers to try when resolving dependencies' attached SBOMs.
      * The plugin will attempt each classifier in order until a match is found.
+     * Default: ["cyclonedx"]
      */
-    @Parameter(property = "sbomClassifiers")
-    private List<String> sbomClassifiers;
+    @Parameter(property = "dependencyClassifiers")
+    private List<String> dependencyClassifiers;
 
     /**
-     * @deprecated Use sbomClassifiers instead. This parameter is kept for backward compatibility.
+     * File extensions to try when resolving dependencies' attached SBOMs.
+     * The plugin will attempt each extension in order until a match is found.
+     * Default: ["json", "xml"]
      */
-    @Deprecated
-    @Parameter(property = "sbomClassifier", defaultValue = "cyclonedx")
-    private String sbomClassifier;
+    @Parameter(property = "dependencyExtensions")
+    private List<String> dependencyExtensions;
 
     /**
-     * File extension/format for the target SBOM ("json" or "xml").
+     * Classifier for the output aggregated SBOM artifact.
+     * Default: "cyclonedx"
      */
-    @Parameter(property = "sbomExtension", defaultValue = "json")
-    private String sbomExtension;
+    @Parameter(property = "outputClassifier", defaultValue = "cyclonedx")
+    private String outputClassifier;
+
+    /**
+     * File extension/format for the output aggregated SBOM ("json" or "xml").
+     * Default: "json"
+     */
+    @Parameter(property = "outputExtension", defaultValue = "json")
+    private String outputExtension;
 
     /**
      * Spec version to target (e.g., "1.4", "1.5", "1.6", "1.7").
@@ -97,16 +107,24 @@ public class AggregateSbomMojo extends AbstractMojo {
 
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
-        // Initialize classifiers list with backward compatibility
-        if (sbomClassifiers == null || sbomClassifiers.isEmpty()) {
-            sbomClassifiers = new ArrayList<>();
-            sbomClassifiers.add(sbomClassifier);
+        // Initialize default values if not provided
+        if (dependencyClassifiers == null || dependencyClassifiers.isEmpty()) {
+            dependencyClassifiers = new ArrayList<>();
+            dependencyClassifiers.add("cyclonedx");
+        }
+        
+        if (dependencyExtensions == null || dependencyExtensions.isEmpty()) {
+            dependencyExtensions = new ArrayList<>();
+            dependencyExtensions.add("json");
+            dependencyExtensions.add("xml");
         }
 
         getLog().info("Aggregating SBOMs for " + project.getArtifactId() + ":" + project.getVersion());
         getLog().debug("Base SBOM: " + projectSbom.getAbsolutePath());
         getLog().debug("Output directory: " + outputDirectory.getAbsolutePath());
-        getLog().debug("SBOM classifiers: " + sbomClassifiers);
+        getLog().debug("Dependency classifiers: " + dependencyClassifiers);
+        getLog().debug("Dependency extensions: " + dependencyExtensions);
+        getLog().debug("Output format: " + outputExtension + " (classifier: " + outputClassifier + ")");
         getLog().debug("Spec version: " + specVersion);
         
         List<File> sbomFilesToMerge = new ArrayList<>();
@@ -126,33 +144,36 @@ public class AggregateSbomMojo extends AbstractMojo {
             String depId = dep.getGroupId() + ":" + dep.getArtifactId() + ":" + dep.getVersion();
             boolean resolved = false;
 
-            // Try each classifier in order
-            for (String classifier : sbomClassifiers) {
-                String artifactCoords = String.format("%s:%s:%s:%s:%s",
-                        dep.getGroupId(), dep.getArtifactId(), sbomExtension, classifier, dep.getVersion());
+            // Try each combination of extension and classifier
+            for (String extension : dependencyExtensions) {
+                for (String classifier : dependencyClassifiers) {
+                    String artifactCoords = String.format("%s:%s:%s:%s:%s",
+                            dep.getGroupId(), dep.getArtifactId(), extension, classifier, dep.getVersion());
 
-                Artifact sbomArtifact = new DefaultArtifact(artifactCoords);
-                ArtifactRequest request = new ArtifactRequest();
-                request.setArtifact(sbomArtifact);
-                request.setRepositories(project.getRemoteProjectRepositories());
+                    Artifact sbomArtifact = new DefaultArtifact(artifactCoords);
+                    ArtifactRequest request = new ArtifactRequest();
+                    request.setArtifact(sbomArtifact);
+                    request.setRepositories(project.getRemoteProjectRepositories());
 
-                try {
-                    ArtifactResult result = repoSystem.resolveArtifact(repoSession, request);
-                    File resolvedFile = result.getArtifact().getFile();
-                    if (resolvedFile != null && resolvedFile.exists()) {
-                        sbomFilesToMerge.add(resolvedFile);
-                        getLog().debug("Resolved SBOM for " + depId + " (classifier: " + classifier + ")");
-                        resolved = true;
-                        break; // Stop trying other classifiers once we find one
+                    try {
+                        ArtifactResult result = repoSystem.resolveArtifact(repoSession, request);
+                        File resolvedFile = result.getArtifact().getFile();
+                        if (resolvedFile != null && resolvedFile.exists()) {
+                            sbomFilesToMerge.add(resolvedFile);
+                            getLog().debug("Resolved SBOM for " + depId + " (" + extension + ":" + classifier + ")");
+                            resolved = true;
+                            break; // Stop trying other classifiers once we find one
+                        }
+                    } catch (Exception e) {
+                        getLog().debug("Could not resolve SBOM with " + extension + ":" + classifier + " for: " + depId);
                     }
-                } catch (Exception e) {
-                    getLog().debug("Could not resolve SBOM with classifier '" + classifier + "' for: " + depId);
                 }
+                if (resolved) break; // Stop trying other extensions once we find one
             }
 
             if (!resolved) {
                 missingSboms.add(depId);
-                getLog().warn("MISSING SBOM: Could not resolve attached SBOM for dependency [" + depId + "] with any classifier: " + sbomClassifiers);
+                getLog().warn("MISSING SBOM: Could not resolve attached SBOM for dependency [" + depId + "]");
             }
         }
 
@@ -171,7 +192,7 @@ public class AggregateSbomMojo extends AbstractMojo {
             
             // Create a minimal BOM even if no files to merge
             Bom minimalBom = mergeBoms(project, Collections.emptyList(), missingSboms);
-            File outputFile = new File(outputDirectory, "aggregated-bom." + sbomExtension);
+            File outputFile = new File(outputDirectory, "aggregated-bom." + outputExtension);
             writeBomToFile(minimalBom, outputFile);
             return;
         }
@@ -203,7 +224,7 @@ public class AggregateSbomMojo extends AbstractMojo {
         Bom mergedBom = mergeBoms(project, boms, missingSboms);
 
         // 4. Serialize and output merged BOM
-        File outputFile = new File(outputDirectory, "aggregated-bom." + sbomExtension);
+        File outputFile = new File(outputDirectory, "aggregated-bom." + outputExtension);
         writeBomToFile(mergedBom, outputFile);
         getLog().info("Aggregated SBOM written to: " + outputFile.getName());
     }
@@ -280,7 +301,7 @@ public class AggregateSbomMojo extends AbstractMojo {
 
         try (FileWriter writer = new FileWriter(outputFile)) {
             String bomContent;
-            if ("json".equalsIgnoreCase(sbomExtension)) {
+            if ("json".equalsIgnoreCase(outputExtension)) {
                 BomJsonGenerator generator = BomGeneratorFactory.createJson(targetVersion, bom);
                 bomContent = generator.toJsonString();
             } else {

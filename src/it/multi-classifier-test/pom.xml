@@ -32,11 +32,15 @@
                         </goals>
                         <configuration>
                             <projectSbom>${project.basedir}/src/sbom/base-bom.json</projectSbom>
-                            <sbomClassifiers>
+                            <dependencyClassifiers>
                                 <classifier>cyclonedx</classifier>
                                 <classifier>sbom</classifier>
                                 <classifier>bom</classifier>
-                            </sbomClassifiers>
+                            </dependencyClassifiers>
+                            <dependencyExtensions>
+                                <extension>json</extension>
+                                <extension>xml</extension>
+                            </dependencyExtensions>
                             <failOnMissingSbom>false</failOnMissingSbom>
                         </configuration>
                     </execution>

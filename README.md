@@ -60,9 +60,10 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
 | :--- | :--- | :--- | :--- |
 | `projectSbom` | `File` | `${project.build.directory}/bom.json` | Path to the base project's CycloneDX SBOM. |
 | `outputDirectory` | `File` | `${project.build.directory}` | Directory where the aggregated SBOM will be written. |
-| `sbomClassifiers` | `List<String>` | `["cyclonedx"]` | List of artifact classifiers to try when resolving dependent SBOMs. The plugin tries each classifier in order until one is found. |
-| `sbomClassifier` | `String` | `cyclonedx` | *(Deprecated)* Single artifact classifier. Use `sbomClassifiers` for multiple options. |
-| `sbomExtension` | `String` | `json` | File format/extension (`json` or `xml`). |
+| `dependencyClassifiers` | `List<String>` | `["cyclonedx"]` | List of artifact classifiers to try when resolving dependent SBOMs. |
+| `dependencyExtensions` | `List<String>` | `["json", "xml"]` | List of file extensions to try when resolving dependent SBOMs. |
+| `outputClassifier` | `String` | `cyclonedx` | Classifier for the output aggregated SBOM artifact. |
+| `outputExtension` | `String` | `json` | File format/extension for the output aggregated SBOM (`json` or `xml`). |
 | `specVersion` | `String` | `1.5` | Target CycloneDX specification version (`1.3`, `1.4`, `1.5`, `1.6`, `1.7`). |
 | `failOnMissingSbom` | `boolean` | `false` | Fails the build if any direct dependency fails to provide an attached SBOM. |
 
@@ -143,9 +144,9 @@ Here's a complete example showing how to use this plugin in a multi-module proje
 
 After running `mvn verify`, you'll find the aggregated SBOM at `target/aggregated-bom.json`.
 
-### Using Multiple Classifiers
+### Configuring Dependency Resolution
 
-If your dependencies use different classifier conventions for their SBOMs, you can configure multiple classifiers to try in order:
+If your dependencies use different classifier or format conventions for their SBOMs, you can configure multiple options to try:
 
 ```xml
 <plugin>
@@ -159,18 +160,36 @@ If your dependencies use different classifier conventions for their SBOMs, you c
                 <goal>aggregate-sboms</goal>
             </goals>
             <configuration>
-                <sbomClassifiers>
+                <!-- Try multiple classifiers -->
+                <dependencyClassifiers>
                     <classifier>cyclonedx</classifier>
                     <classifier>sbom</classifier>
                     <classifier>bom</classifier>
-                </sbomClassifiers>
+                </dependencyClassifiers>
+                <!-- Try multiple formats -->
+                <dependencyExtensions>
+                    <extension>json</extension>
+                    <extension>xml</extension>
+                </dependencyExtensions>
             </configuration>
         </execution>
     </executions>
 </plugin>
 ```
 
-The plugin will try each classifier in order for each dependency until it finds an attached SBOM.
+The plugin will try each combination of extension and classifier in order for each dependency until it finds an attached SBOM.
+
+### Customizing Output Format
+
+You can control the format and classifier of the generated aggregated SBOM:
+
+```xml
+<configuration>
+    <outputExtension>xml</outputExtension>
+    <outputClassifier>aggregated-sbom</outputClassifier>
+    <specVersion>1.6</specVersion>
+</configuration>
+```
 
 ---
 
