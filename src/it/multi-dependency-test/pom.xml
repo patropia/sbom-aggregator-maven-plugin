@@ -37,7 +37,7 @@
             <plugin>
                 <groupId>nl.patropia.maven.plugin</groupId>
                 <artifactId>sbom-aggregator-maven-plugin</artifactId>
-                <version>${project.version}</version>
+                <version>@project.version@</version>
                 <executions>
                     <execution>
                         <phase>verify</phase>
