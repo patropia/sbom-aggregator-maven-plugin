@@ -58,8 +58,16 @@ public class AggregateSbomMojo extends AbstractMojo {
     private File outputDirectory;
 
     /**
-     * Classifier used when dependencies publish their attached SBOMs.
+     * Classifiers to try when resolving dependencies' attached SBOMs.
+     * The plugin will attempt each classifier in order until a match is found.
      */
+    @Parameter(property = "sbomClassifiers")
+    private List<String> sbomClassifiers;
+
+    /**
+     * @deprecated Use sbomClassifiers instead. This parameter is kept for backward compatibility.
+     */
+    @Deprecated
     @Parameter(property = "sbomClassifier", defaultValue = "cyclonedx")
     private String sbomClassifier;
 
@@ -89,6 +97,12 @@ public class AggregateSbomMojo extends AbstractMojo {
 
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
+        // Initialize classifiers list with backward compatibility
+        if (sbomClassifiers == null || sbomClassifiers.isEmpty()) {
+            sbomClassifiers = new ArrayList<>();
+            sbomClassifiers.add(sbomClassifier);
+        }
+
         getLog().info("=================================================");
         getLog().info("SBOM Aggregator Plugin Execution Starting");
         getLog().info("=================================================");
@@ -96,6 +110,7 @@ public class AggregateSbomMojo extends AbstractMojo {
         getLog().info("Base SBOM path: " + projectSbom.getAbsolutePath());
         getLog().info("Output directory: " + outputDirectory.getAbsolutePath());
         getLog().info("SBOM extension: " + sbomExtension);
+        getLog().info("SBOM classifiers: " + sbomClassifiers);
         getLog().info("Spec version: " + specVersion);
         getLog().info("Fail on missing: " + failOnMissingSbom);
         
@@ -117,25 +132,36 @@ public class AggregateSbomMojo extends AbstractMojo {
 
         // 2. Resolve dependency SBOM artifacts
         for (org.apache.maven.model.Dependency dep : project.getDependencies()) {
-            String artifactCoords = String.format("%s:%s:%s:%s:%s",
-                    dep.getGroupId(), dep.getArtifactId(), sbomExtension, sbomClassifier, dep.getVersion());
+            String depId = dep.getGroupId() + ":" + dep.getArtifactId() + ":" + dep.getVersion();
+            boolean resolved = false;
 
-            Artifact sbomArtifact = new DefaultArtifact(artifactCoords);
-            ArtifactRequest request = new ArtifactRequest();
-            request.setArtifact(sbomArtifact);
-            request.setRepositories(project.getRemoteProjectRepositories());
+            // Try each classifier in order
+            for (String classifier : sbomClassifiers) {
+                String artifactCoords = String.format("%s:%s:%s:%s:%s",
+                        dep.getGroupId(), dep.getArtifactId(), sbomExtension, classifier, dep.getVersion());
 
-            try {
-                ArtifactResult result = repoSystem.resolveArtifact(repoSession, request);
-                File resolvedFile = result.getArtifact().getFile();
-                if (resolvedFile != null && resolvedFile.exists()) {
-                    sbomFilesToMerge.add(resolvedFile);
-                    getLog().info("Resolved attached SBOM for: " + dep.getGroupId() + ":" + dep.getArtifactId());
+                Artifact sbomArtifact = new DefaultArtifact(artifactCoords);
+                ArtifactRequest request = new ArtifactRequest();
+                request.setArtifact(sbomArtifact);
+                request.setRepositories(project.getRemoteProjectRepositories());
+
+                try {
+                    ArtifactResult result = repoSystem.resolveArtifact(repoSession, request);
+                    File resolvedFile = result.getArtifact().getFile();
+                    if (resolvedFile != null && resolvedFile.exists()) {
+                        sbomFilesToMerge.add(resolvedFile);
+                        getLog().info("Resolved attached SBOM for: " + depId + " (classifier: " + classifier + ")");
+                        resolved = true;
+                        break; // Stop trying other classifiers once we find one
+                    }
+                } catch (Exception e) {
+                    getLog().debug("Could not resolve SBOM with classifier '" + classifier + "' for: " + depId);
                 }
-            } catch (Exception e) {
-                String depId = dep.getGroupId() + ":" + dep.getArtifactId() + ":" + dep.getVersion();
+            }
+
+            if (!resolved) {
                 missingSboms.add(depId);
-                getLog().warn("MISSING SBOM: Could not resolve attached SBOM for dependency [" + depId + "]");
+                getLog().warn("MISSING SBOM: Could not resolve attached SBOM for dependency [" + depId + "] with any classifier: " + sbomClassifiers);
             }
         }
 

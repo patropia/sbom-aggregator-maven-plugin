@@ -1,0 +1,14 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "group": "nl.patropia.maven.it",
+      "name": "multi-classifier-test",
+      "version": "1.0.0-SNAPSHOT"
+    }
+  },
+  "components": []
+}

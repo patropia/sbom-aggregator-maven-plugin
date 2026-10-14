@@ -60,7 +60,8 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
 | :--- | :--- | :--- | :--- |
 | `projectSbom` | `File` | `${project.build.directory}/bom.json` | Path to the base project's CycloneDX SBOM. |
 | `outputDirectory` | `File` | `${project.build.directory}` | Directory where the aggregated SBOM will be written. |
-| `sbomClassifier` | `String` | `cyclonedx` | Artifact classifier used when resolving dependent SBOMs. |
+| `sbomClassifiers` | `List<String>` | `["cyclonedx"]` | List of artifact classifiers to try when resolving dependent SBOMs. The plugin tries each classifier in order until one is found. |
+| `sbomClassifier` | `String` | `cyclonedx` | *(Deprecated)* Single artifact classifier. Use `sbomClassifiers` for multiple options. |
 | `sbomExtension` | `String` | `json` | File format/extension (`json` or `xml`). |
 | `specVersion` | `String` | `1.5` | Target CycloneDX specification version (`1.3`, `1.4`, `1.5`, `1.6`, `1.7`). |
 | `failOnMissingSbom` | `boolean` | `false` | Fails the build if any direct dependency fails to provide an attached SBOM. |
@@ -141,6 +142,35 @@ Here's a complete example showing how to use this plugin in a multi-module proje
 ```
 
 After running `mvn verify`, you'll find the aggregated SBOM at `target/aggregated-bom.json`.
+
+### Using Multiple Classifiers
+
+If your dependencies use different classifier conventions for their SBOMs, you can configure multiple classifiers to try in order:
+
+```xml
+<plugin>
+    <groupId>nl.patropia.maven.plugin</groupId>
+    <artifactId>sbom-aggregator-maven-plugin</artifactId>
+    <version>1.0.0</version>
+    <executions>
+        <execution>
+            <phase>verify</phase>
+            <goals>
+                <goal>aggregate-sboms</goal>
+            </goals>
+            <configuration>
+                <sbomClassifiers>
+                    <classifier>cyclonedx</classifier>
+                    <classifier>sbom</classifier>
+                    <classifier>bom</classifier>
+                </sbomClassifiers>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+```
+
+The plugin will try each classifier in order for each dependency until it finds an attached SBOM.
 
 ---
 
