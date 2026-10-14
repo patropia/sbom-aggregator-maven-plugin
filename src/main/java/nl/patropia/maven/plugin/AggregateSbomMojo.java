@@ -103,29 +103,20 @@ public class AggregateSbomMojo extends AbstractMojo {
             sbomClassifiers.add(sbomClassifier);
         }
 
-        getLog().info("=================================================");
-        getLog().info("SBOM Aggregator Plugin Execution Starting");
-        getLog().info("=================================================");
-        getLog().info("Project: " + project.getGroupId() + ":" + project.getArtifactId() + ":" + project.getVersion());
-        getLog().info("Base SBOM path: " + projectSbom.getAbsolutePath());
-        getLog().info("Output directory: " + outputDirectory.getAbsolutePath());
-        getLog().info("SBOM extension: " + sbomExtension);
-        getLog().info("SBOM classifiers: " + sbomClassifiers);
-        getLog().info("Spec version: " + specVersion);
-        getLog().info("Fail on missing: " + failOnMissingSbom);
+        getLog().info("Aggregating SBOMs for " + project.getArtifactId() + ":" + project.getVersion());
+        getLog().debug("Base SBOM: " + projectSbom.getAbsolutePath());
+        getLog().debug("Output directory: " + outputDirectory.getAbsolutePath());
+        getLog().debug("SBOM classifiers: " + sbomClassifiers);
+        getLog().debug("Spec version: " + specVersion);
         
         List<File> sbomFilesToMerge = new ArrayList<>();
 
         // 1. Collect base project SBOM
         if (projectSbom.exists()) {
             sbomFilesToMerge.add(projectSbom);
-            getLog().info("✓ Found base project SBOM: " + projectSbom.getAbsolutePath());
+            getLog().debug("Found base project SBOM");
         } else {
-            getLog().warn("✗ Base project SBOM not found at: " + projectSbom.getAbsolutePath());
-            getLog().warn("  Parent directory exists: " + projectSbom.getParentFile().exists());
-            if (projectSbom.getParentFile().exists()) {
-                getLog().warn("  Parent directory contents: " + java.util.Arrays.toString(projectSbom.getParentFile().list()));
-            }
+            getLog().warn("Base project SBOM not found at: " + projectSbom.getAbsolutePath());
         }
 
         List<String> missingSboms = new ArrayList<>();
@@ -150,7 +141,7 @@ public class AggregateSbomMojo extends AbstractMojo {
                     File resolvedFile = result.getArtifact().getFile();
                     if (resolvedFile != null && resolvedFile.exists()) {
                         sbomFilesToMerge.add(resolvedFile);
-                        getLog().info("Resolved attached SBOM for: " + depId + " (classifier: " + classifier + ")");
+                        getLog().debug("Resolved SBOM for " + depId + " (classifier: " + classifier + ")");
                         resolved = true;
                         break; // Stop trying other classifiers once we find one
                     }
@@ -167,12 +158,8 @@ public class AggregateSbomMojo extends AbstractMojo {
 
         // Summary reporting for missing SBOMs
         if (!missingSboms.isEmpty()) {
-            getLog().warn("=================================================");
-            getLog().warn("Dependencies missing attached SBOMs (" + missingSboms.size() + "):");
-            for (String missing : missingSboms) {
-                getLog().warn(" - " + missing);
-            }
-            getLog().warn("=================================================");
+            getLog().warn("Missing SBOMs for " + missingSboms.size() + " dependencies");
+            getLog().debug("Dependencies without SBOMs: " + missingSboms);
 
             if (failOnMissingSbom) {
                 throw new MojoFailureException("Build failed due to missing attached SBOMs for " + missingSboms.size() + " dependencies.");
@@ -180,10 +167,7 @@ public class AggregateSbomMojo extends AbstractMojo {
         }
 
         if (sbomFilesToMerge.isEmpty()) {
-            getLog().warn("=================================================");
-            getLog().warn("No SBOM files available to aggregate.");
-            getLog().warn("Creating minimal aggregated SBOM with project metadata only.");
-            getLog().warn("=================================================");
+            getLog().warn("No SBOM files available to aggregate - creating minimal SBOM");
             
             // Create a minimal BOM even if no files to merge
             Bom minimalBom = mergeBoms(project, Collections.emptyList(), missingSboms);
@@ -215,17 +199,13 @@ public class AggregateSbomMojo extends AbstractMojo {
             }
         }
 
-        getLog().info("=================================================");
-        getLog().info("Merging " + boms.size() + " BOMs hierarchically in-memory...");
+        getLog().debug("Merging " + boms.size() + " BOMs in-memory");
         Bom mergedBom = mergeBoms(project, boms, missingSboms);
 
         // 4. Serialize and output merged BOM
         File outputFile = new File(outputDirectory, "aggregated-bom." + sbomExtension);
-        getLog().info("Writing aggregated SBOM to: " + outputFile.getAbsolutePath());
         writeBomToFile(mergedBom, outputFile);
-        getLog().info("=================================================");
-        getLog().info("SBOM Aggregation Complete!");
-        getLog().info("=================================================");
+        getLog().info("Aggregated SBOM written to: " + outputFile.getName());
     }
 
     Bom mergeBoms(MavenProject mavenProject, List<Bom> parsedBoms, List<String> missingDepsCoords) {
@@ -292,39 +272,27 @@ public class AggregateSbomMojo extends AbstractMojo {
     }
 
     private void writeBomToFile(Bom bom, File outputFile) throws MojoExecutionException {
-        getLog().info("Preparing to write BOM file...");
-        getLog().info("  Output directory: " + outputDirectory.getAbsolutePath());
-        getLog().info("  Output directory exists: " + outputDirectory.exists());
-        
         if (!outputDirectory.exists()) {
-            getLog().info("  Creating output directory...");
-            boolean created = outputDirectory.mkdirs();
-            getLog().info("  Directory created: " + created);
+            outputDirectory.mkdirs();
         }
 
         Version targetVersion = parseVersion(specVersion);
-        getLog().info("  Target CycloneDX version: " + targetVersion);
 
         try (FileWriter writer = new FileWriter(outputFile)) {
             String bomContent;
             if ("json".equalsIgnoreCase(sbomExtension)) {
-                getLog().info("  Generating JSON format...");
                 BomJsonGenerator generator = BomGeneratorFactory.createJson(targetVersion, bom);
                 bomContent = generator.toJsonString();
             } else {
-                getLog().info("  Generating XML format...");
                 BomXmlGenerator generator = BomGeneratorFactory.createXml(targetVersion, bom);
                 bomContent = generator.toXmlString();
             }
 
-            getLog().info("  Writing " + bomContent.length() + " bytes to file...");
             writer.write(bomContent);
             writer.flush();
-            getLog().info("✓ Successfully generated merged SBOM at: " + outputFile.getAbsolutePath());
-            getLog().info("  File exists after write: " + outputFile.exists());
-            getLog().info("  File size: " + outputFile.length() + " bytes");
+            getLog().debug("Generated SBOM: " + outputFile.length() + " bytes");
         } catch (Exception e) {
-            getLog().error("✗ Failed to write merged SBOM to output file: " + outputFile.getAbsolutePath(), e);
+            getLog().error("Failed to write SBOM: " + e.getMessage());
             throw new MojoExecutionException("Failed to write merged SBOM to output file: " + e.getMessage(), e);
         }
     }
