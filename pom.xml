@@ -12,7 +12,7 @@
     <name>SBOM Aggregator Maven Plugin</name>
     <description>A Maven plugin to aggregate CycloneDX Software Bill of Materials (SBOMs) across multi-repo dependencies in-memory.</description>
     <url>https://github.com/patropia/sbom-aggregator-maven-plugin</url>
-    <inceptionYear>2024</inceptionYear>
+    <inceptionYear>2026</inceptionYear>
 
     <licenses>
         <license>
