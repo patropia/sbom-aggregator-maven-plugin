@@ -8,6 +8,7 @@ import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.project.MavenProjectHelper;
 import org.apache.maven.plugins.annotations.ResolutionScope;
 import org.apache.maven.project.MavenProject;
 import org.cyclonedx.Version;
@@ -15,8 +16,6 @@ import org.cyclonedx.generators.BomGeneratorFactory;
 import org.cyclonedx.generators.json.BomJsonGenerator;
 import org.cyclonedx.generators.xml.BomXmlGenerator;
 import org.cyclonedx.model.Bom;
-import org.cyclonedx.model.Dependency;
-import org.cyclonedx.model.Metadata;
 import org.cyclonedx.parsers.JsonParser;
 import org.cyclonedx.parsers.XmlParser;
 import org.eclipse.aether.RepositorySystem;
@@ -27,15 +26,25 @@ import org.eclipse.aether.resolution.ArtifactRequest;
 import org.eclipse.aether.resolution.ArtifactResult;
 
 import java.io.File;
-import java.io.FileWriter;
+import java.io.IOException;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
 
+/**
+ * Aggregates the project's own CycloneDX SBOM with the SBOMs attached to its dependencies into a
+ * single BOM written to the build output directory.
+ */
 @Mojo(
     name = "aggregate-sboms",
     defaultPhase = LifecyclePhase.VERIFY,
-    requiresDependencyResolution = ResolutionScope.COMPILE_PLUS_RUNTIME
+    requiresDependencyResolution = ResolutionScope.COMPILE_PLUS_RUNTIME,
+    threadSafe = true
 )
 public class AggregateSbomMojo extends AbstractMojo {
 
@@ -77,18 +86,18 @@ public class AggregateSbomMojo extends AbstractMojo {
      * Classifier for the output aggregated SBOM artifact.
      * Default: "cyclonedx"
      */
-    @Parameter(property = "outputClassifier", defaultValue = "cyclonedx")
+    @Parameter(property = "sbomAggregator.outputClassifier", defaultValue = "cyclonedx")
     private String outputClassifier;
 
     /**
-     * File extension/format for the output aggregated SBOM ("json" or "xml").
+     * File extension/format for the output aggregated SBOM ("json" or "xml", case-insensitive).
      * Default: "json"
      */
     @Parameter(property = "outputExtension", defaultValue = "json")
     private String outputExtension;
 
     /**
-     * Spec version to target (e.g., "1.4", "1.5", "1.6", "1.7").
+     * Spec version to target (e.g., "1.3", "1.4", "1.5", "1.6", "1.7").
      */
     @Parameter(property = "specVersion", defaultValue = "1.5")
     private String specVersion;
@@ -102,17 +111,46 @@ public class AggregateSbomMojo extends AbstractMojo {
     @Component
     private RepositorySystem repoSystem;
 
+    @Component
+    private MavenProjectHelper projectHelper;
+
     @Parameter(defaultValue = "${repositorySystemSession}", readonly = true)
     private RepositorySystemSession repoSession;
 
+    /**
+     * Whether to attach the aggregated SBOM to the project using outputClassifier/outputExtension.
+     * Default: true
+     */
+    @Parameter(property = "sbomAggregator.attach", defaultValue = "true")
+    private boolean attach;
+
+    /**
+     * Skip execution
+     */
+    @Parameter(property = "sbomAggregator.skip", defaultValue = "false")
+    private boolean skip;
+
+    /**
+     * Base name for the output file (without extension). Default: "aggregated-bom"
+     */
+    @Parameter(property = "sbomAggregator.outputName", defaultValue = "aggregated-bom")
+    private String outputName;
+
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
+        if (skip) {
+            getLog().info("Skipping SBOM aggregation (skip=true)");
+            return;
+        }
+
+        validateConfiguration();
+
         // Initialize default values if not provided
         if (dependencyClassifiers == null || dependencyClassifiers.isEmpty()) {
             dependencyClassifiers = new ArrayList<>();
             dependencyClassifiers.add("cyclonedx");
         }
-        
+
         if (dependencyExtensions == null || dependencyExtensions.isEmpty()) {
             dependencyExtensions = new ArrayList<>();
             dependencyExtensions.add("json");
@@ -126,7 +164,7 @@ public class AggregateSbomMojo extends AbstractMojo {
         getLog().debug("Dependency extensions: " + dependencyExtensions);
         getLog().debug("Output format: " + outputExtension + " (classifier: " + outputClassifier + ")");
         getLog().debug("Spec version: " + specVersion);
-        
+
         List<File> sbomFilesToMerge = new ArrayList<>();
 
         // 1. Collect base project SBOM
@@ -137,7 +175,7 @@ public class AggregateSbomMojo extends AbstractMojo {
             getLog().warn("Base project SBOM not found at: " + projectSbom.getAbsolutePath());
         }
 
-        List<String> missingSboms = new ArrayList<>();
+        List<SbomMerger.MissingDependency> missingSboms = new ArrayList<>();
 
         // 2. Resolve dependency SBOM artifacts
         for (org.apache.maven.model.Dependency dep : project.getDependencies()) {
@@ -168,11 +206,14 @@ public class AggregateSbomMojo extends AbstractMojo {
                         getLog().debug("Could not resolve SBOM with " + extension + ":" + classifier + " for: " + depId);
                     }
                 }
-                if (resolved) break; // Stop trying other extensions once we find one
+                if (resolved) {
+                    break; // Stop trying other extensions once we find one
+                }
             }
 
             if (!resolved) {
-                missingSboms.add(depId);
+                missingSboms.add(new SbomMerger.MissingDependency(
+                        dep.getGroupId(), dep.getArtifactId(), dep.getVersion()));
                 getLog().warn("MISSING SBOM: Could not resolve attached SBOM for dependency [" + depId + "]");
             }
         }
@@ -183,32 +224,21 @@ public class AggregateSbomMojo extends AbstractMojo {
             getLog().debug("Dependencies without SBOMs: " + missingSboms);
 
             if (failOnMissingSbom) {
-                throw new MojoFailureException("Build failed due to missing attached SBOMs for " + missingSboms.size() + " dependencies.");
+                throw new MojoFailureException("Build failed due to missing attached SBOMs for "
+                        + missingSboms.size() + " dependencies.");
             }
-        }
-
-        if (sbomFilesToMerge.isEmpty()) {
-            getLog().warn("No SBOM files available to aggregate - creating minimal SBOM");
-            
-            // Create a minimal BOM even if no files to merge
-            Bom minimalBom = mergeBoms(project, Collections.emptyList(), missingSboms);
-            File outputFile = new File(outputDirectory, "aggregated-bom." + outputExtension);
-            writeBomToFile(minimalBom, outputFile);
-            return;
         }
 
         // 3. Parse BOMs using JsonParser or XmlParser
         List<Bom> boms = new ArrayList<>();
-        JsonParser jsonParser = new JsonParser();
-        XmlParser xmlParser = new XmlParser();
 
         for (File file : sbomFilesToMerge) {
             try {
                 Bom parsedBom;
-                if (file.getName().toLowerCase().endsWith(".xml")) {
-                    parsedBom = xmlParser.parse(file);
+                if (file.getName().toLowerCase(Locale.ROOT).endsWith(".xml")) {
+                    parsedBom = new XmlParser().parse(file);
                 } else {
-                    parsedBom = jsonParser.parse(file);
+                    parsedBom = new JsonParser().parse(file);
                 }
 
                 if (parsedBom != null) {
@@ -220,112 +250,178 @@ public class AggregateSbomMojo extends AbstractMojo {
             }
         }
 
+        if (boms.isEmpty() && missingSboms.isEmpty()) {
+            getLog().warn("No SBOM files available to aggregate - creating minimal SBOM");
+        }
+
         getLog().debug("Merging " + boms.size() + " BOMs in-memory");
-        Bom mergedBom = mergeBoms(project, boms, missingSboms);
+        Bom mergedBom = SbomMerger.merge(
+                project.getGroupId(),
+                project.getArtifactId(),
+                project.getVersion(),
+                boms,
+                missingSboms);
 
         // 4. Serialize and output merged BOM
-        File outputFile = new File(outputDirectory, "aggregated-bom." + outputExtension);
+        File outputFile = new File(outputDirectory, outputName + "." + outputExtension());
         writeBomToFile(mergedBom, outputFile);
         getLog().info("Aggregated SBOM written to: " + outputFile.getName());
+
+        if (attach) {
+            // warn if an artifact with same classifier/type is already attached
+            boolean clash = false;
+            for (org.apache.maven.artifact.Artifact a : project.getAttachedArtifacts()) {
+                String aClassifier = a.getClassifier();
+                String aType = a.getType();
+                if (Objects.equals(aClassifier, outputClassifier) && Objects.equals(aType, outputExtension())) {
+                    clash = true;
+                    break;
+                }
+            }
+            if (clash) {
+                getLog().warn("Attaching aggregated SBOM will replace an existing attached artifact with classifier '" + outputClassifier + "' and type '" + outputExtension() + "'.");
+            }
+            if (projectHelper == null) {
+                throw new MojoExecutionException("Cannot attach aggregated SBOM because projectHelper is not available");
+            }
+            try {
+                projectHelper.attachArtifact(project, outputExtension(), outputClassifier, outputFile);
+                getLog().info("Aggregated SBOM attached to project with classifier='" + outputClassifier + "' and type='" + outputExtension() + "'.");
+            } catch (Exception e) {
+                throw new MojoExecutionException("Failed to attach aggregated SBOM to project", e);
+            }
+        }
     }
 
+    /**
+     * Validates and normalises the plugin configuration. Must run before any resolution work so an
+     * invalid configuration fails fast with a clear message.
+     */
+    void validateConfiguration() throws MojoExecutionException {
+        if (specVersion == null) {
+            throw new MojoExecutionException("specVersion is required; supported values: "
+                    + SpecValidation.SUPPORTED_SPEC_VERSIONS);
+        }
+        specVersion = specVersion.trim();
+        outputExtension = outputExtension();
+        if (outputExtension == null || outputExtension.isEmpty()) {
+            throw new MojoExecutionException("outputExtension must be set to 'json' or 'xml'");
+        }
+        SpecValidation.validateSpecVersion(specVersion);
+        SpecValidation.validateOutputExtension(outputExtension);
+
+        // validate outputName to avoid writing outside the output directory
+        if (outputName == null || outputName.trim().isEmpty()) {
+            throw new MojoExecutionException("outputName must not be blank");
+        }
+        String on = outputName.trim();
+        if (on.contains("/") || on.contains("\\") || on.contains("..")) {
+            throw new MojoExecutionException("outputName must not contain path separators or '..' to avoid writing outside the output directory");
+        }
+        outputName = on;
+
+        // An aggregated SBOM that is attached without a classifier would replace the project's main
+        // artifact, so a blank classifier is only allowed when attaching is switched off.
+        if (outputClassifier == null || outputClassifier.trim().isEmpty()) {
+            if (attach) {
+                throw new MojoExecutionException("outputClassifier must not be blank when attach=true; "
+                        + "an empty classifier would replace the project's main artifact. "
+                        + "Set outputClassifier or use -DsbomAggregator.attach=false");
+            }
+        } else {
+            outputClassifier = outputClassifier.trim();
+        }
+    }
+
+    /**
+     * @return the normalised (trimmed, lower-case) output extension, never {@code null} unless it
+     *         was not configured at all.
+     */
+    String outputExtension() {
+        if (outputExtension == null) {
+            return null;
+        }
+        return outputExtension.trim().toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Merges the given BOMs. Retained as a thin wrapper around {@link SbomMerger#merge} for
+     * callers that still hold Maven coordinates as {@code groupId:artifactId:version} strings.
+     */
     Bom mergeBoms(MavenProject mavenProject, List<Bom> parsedBoms, List<String> missingDepsCoords) {
-        Bom masterBom = new Bom();
-
-        // 1. Establish Root Project Metadata & Component
-        Metadata metadata = new Metadata();
-        org.cyclonedx.model.Component rootComponent = new org.cyclonedx.model.Component();
-        rootComponent.setType(org.cyclonedx.model.Component.Type.APPLICATION);
-        rootComponent.setGroup(mavenProject.getGroupId());
-        rootComponent.setName(mavenProject.getArtifactId());
-        rootComponent.setVersion(mavenProject.getVersion());
-        rootComponent.setPurl(String.format("pkg:maven/%s/%s@%s", mavenProject.getGroupId(), mavenProject.getArtifactId(), mavenProject.getVersion()));
-        metadata.setComponent(rootComponent);
-        masterBom.setMetadata(metadata);
-
-        List<org.cyclonedx.model.Component> allComponents = new ArrayList<>();
-        List<Dependency> allDependencies = new ArrayList<>();
-        List<Dependency> childDependencies = new ArrayList<>();
-
-        // Add components and dependency trees from successfully parsed SBOMs
-        for (Bom bom : parsedBoms) {
-            if (bom.getComponents() != null) {
-                allComponents.addAll(bom.getComponents());
-            }
-            if (bom.getDependencies() != null) {
-                allDependencies.addAll(bom.getDependencies());
+        List<SbomMerger.MissingDependency> missing = new ArrayList<>();
+        if (missingDepsCoords != null) {
+            for (String coordinates : missingDepsCoords) {
+                SbomMerger.MissingDependency missingDependency = SbomMerger.MissingDependency.parse(coordinates);
+                if (missingDependency != null) {
+                    missing.add(missingDependency);
+                }
             }
         }
-
-        // 2. Handle dependencies that DO NOT provide an SBOM (create fallback components)
-        for (String missingCoord : missingDepsCoords) {
-            String[] parts = missingCoord.split(":");
-            if (parts.length >= 3) {
-                String g = parts[0];
-                String a = parts[1];
-                String v = parts[2];
-
-                org.cyclonedx.model.Component missingComp = new org.cyclonedx.model.Component();
-                missingComp.setType(org.cyclonedx.model.Component.Type.LIBRARY);
-                missingComp.setGroup(g);
-                missingComp.setName(a);
-                missingComp.setVersion(v);
-                missingComp.setPurl(String.format("pkg:maven/%s/%s@%s", g, a, v));
-                
-                allComponents.add(missingComp);
-            }
-        }
-
-        // 3. Construct explicit dependency tree wiring for the root component
-        Dependency rootDependency = new Dependency(rootComponent.getPurl());
-        for (org.cyclonedx.model.Component c : allComponents) {
-            if (c.getPurl() != null) {
-                childDependencies.add(new Dependency(c.getPurl()));
-            }
-        }
-        rootDependency.setDependencies(childDependencies);
-        allDependencies.add(rootDependency);
-
-        masterBom.setComponents(allComponents);
-        masterBom.setDependencies(allDependencies);
-
-        return masterBom;
+        return SbomMerger.merge(
+                mavenProject.getGroupId(),
+                mavenProject.getArtifactId(),
+                mavenProject.getVersion(),
+                parsedBoms == null ? Collections.emptyList() : parsedBoms,
+                missing);
     }
 
-    private void writeBomToFile(Bom bom, File outputFile) throws MojoExecutionException {
-        if (!outputDirectory.exists()) {
-            outputDirectory.mkdirs();
-        }
+    /**
+     * Serialises the given BOM in the configured format and spec version, writing it as UTF-8.
+     */
+    void writeBomToFile(Bom bom, File outputFile) throws MojoExecutionException {
+        Version targetVersion = SpecValidation.toCycloneDxVersion(specVersion);
 
-        Version targetVersion = parseVersion(specVersion);
-
-        try (FileWriter writer = new FileWriter(outputFile)) {
-            String bomContent;
-            if ("json".equalsIgnoreCase(outputExtension)) {
+        try {
+            String content;
+            if ("json".equals(outputExtension())) {
                 BomJsonGenerator generator = BomGeneratorFactory.createJson(targetVersion, bom);
-                bomContent = generator.toJsonString();
+                content = generator.toJsonString();
             } else {
                 BomXmlGenerator generator = BomGeneratorFactory.createXml(targetVersion, bom);
-                bomContent = generator.toXmlString();
+                content = generator.toXmlString();
             }
 
-            writer.write(bomContent);
-            writer.flush();
-            getLog().debug("Generated SBOM: " + outputFile.length() + " bytes");
-        } catch (Exception e) {
+            File parent = outputFile.getParentFile();
+            if (parent != null) {
+                Files.createDirectories(parent.toPath());
+            }
+            try (Writer writer = Files.newBufferedWriter(outputFile.toPath(), StandardCharsets.UTF_8)) {
+                writer.write(content);
+            }
+        } catch (IOException | org.cyclonedx.exception.GeneratorException e) {
             getLog().error("Failed to write SBOM: " + e.getMessage());
             throw new MojoExecutionException("Failed to write merged SBOM to output file: " + e.getMessage(), e);
         }
+        getLog().debug("Generated SBOM: " + outputFile.length() + " bytes");
     }
 
-    private Version parseVersion(String versionStr) {
-        switch (versionStr) {
-            case "1.7": return Version.VERSION_17;
-            case "1.6": return Version.VERSION_16;
-            case "1.4": return Version.VERSION_14;
-            case "1.3": return Version.VERSION_13;
-            case "1.5":
-            default: return Version.VERSION_15;
-        }
+    // Package-private setters for unit tests.
+
+    void setSpecVersion(String specVersion) {
+        this.specVersion = specVersion;
     }
+
+    void setOutputExtension(String outputExtension) {
+        this.outputExtension = outputExtension;
+    }
+
+    void setOutputClassifier(String outputClassifier) {
+        this.outputClassifier = outputClassifier;
+    }
+
+    void setOutputDirectory(File outputDirectory) {
+        this.outputDirectory = outputDirectory;
+    }
+
+    void setProjectSbom(File projectSbom) {
+        this.projectSbom = projectSbom;
+    }
+
+    // Package-private setters for new fields (used by unit tests)
+    void setAttach(boolean attach) { this.attach = attach; }
+    void setSkip(boolean skip) { this.skip = skip; }
+    void setOutputName(String outputName) { this.outputName = outputName; }
+
+    void setProjectHelper(MavenProjectHelper projectHelper) { this.projectHelper = projectHelper; }
 }
