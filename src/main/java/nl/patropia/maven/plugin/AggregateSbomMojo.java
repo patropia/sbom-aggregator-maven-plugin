@@ -42,7 +42,13 @@ import org.eclipse.aether.resolution.ArtifactResult;
 import org.eclipse.aether.resolution.ArtifactResolutionException;
 import org.eclipse.aether.transfer.ArtifactNotFoundException;
 
+import org.cyclonedx.exception.ParseException;
+import org.cyclonedx.model.Metadata;
+
+import java.time.Instant;
+import java.util.Date;
 import java.util.LinkedHashMap;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 import java.io.File;
@@ -175,6 +181,38 @@ public class AggregateSbomMojo extends AbstractMojo {
     @Parameter(property = "sbomAggregator.outputName", defaultValue = "aggregated-bom")
     private String outputName;
 
+    /**
+     * Timestamp written into the aggregated BOM metadata. Accepts an ISO-8601 instant
+     * (for example {@code 2024-01-01T00:00:00Z}) or epoch seconds. Defaults to the Maven
+     * reproducible-builds property {@code project.build.outputTimestamp}; when that is not set the
+     * current time is used.
+     */
+    @Parameter(property = "sbomAggregator.outputTimestamp", defaultValue = "${project.build.outputTimestamp}")
+    String outputTimestamp;
+
+    /**
+     * How the serial number of the aggregated BOM is generated:
+     * {@code deterministic} derives it from the BOM content so identical inputs produce identical
+     * serials, {@code random} generates a fresh UUID on every build, {@code none} omits it.
+     * Default: deterministic
+     */
+    @Parameter(property = "sbomAggregator.serialNumberMode", defaultValue = "deterministic")
+    String serialNumberMode = "deterministic";
+
+    /**
+     * Validate the aggregated BOM against the CycloneDX JSON/XML schema of the configured spec
+     * version after writing it. Schema violations fail the build. Default: true
+     */
+    @Parameter(property = "sbomAggregator.validateOutput", defaultValue = "true")
+    boolean validateOutput = true;
+
+    /**
+     * Maximum size of a single input SBOM, checked before the file is parsed. Accepts a byte count or
+     * a value suffixed with KB, MB or GB (case-insensitive). 0 disables the check. Default: 50MB
+     */
+    @Parameter(property = "sbomAggregator.maxInputSize", defaultValue = "50MB")
+    String maxInputSize = "50MB";
+
     @Override
     public void execute() throws MojoExecutionException, MojoFailureException {
         if (skip) {
@@ -278,20 +316,9 @@ public class AggregateSbomMojo extends AbstractMojo {
         List<Bom> boms = new ArrayList<>();
 
         for (File file : sbomFilesToMerge) {
-            try {
-                Bom parsedBom;
-                if (file.getName().toLowerCase(Locale.ROOT).endsWith(".xml")) {
-                    parsedBom = new XmlParser().parse(file);
-                } else {
-                    parsedBom = new JsonParser().parse(file);
-                }
-
-                if (parsedBom != null) {
-                    boms.add(parsedBom);
-                }
-            } catch (Exception e) {
-                getLog().error("Failed to parse SBOM file: " + file.getAbsolutePath(), e);
-                throw new MojoExecutionException("Error parsing SBOM: " + file.getName(), e);
+            Bom parsedBom = parseSbom(file);
+            if (parsedBom != null) {
+                boms.add(parsedBom);
             }
         }
 
@@ -305,12 +332,15 @@ public class AggregateSbomMojo extends AbstractMojo {
                 project.getArtifactId(),
                 project.getVersion(),
                 boms,
-                missingSboms);
+                missingSboms,
+                outputDate());
+        applySerialNumber(mergedBom);
 
         // 4. Serialize and output merged BOM
         File outputFile = new File(outputDirectory, outputName + "." + outputExtension());
         writeBomToFile(mergedBom, outputFile);
         getLog().info("Aggregated SBOM written to: " + outputFile.getName());
+        validateWrittenOutput(outputFile);
 
         if (attach) {
             // warn if an artifact with same classifier/type is already attached
@@ -434,6 +464,12 @@ public class AggregateSbomMojo extends AbstractMojo {
                     + SpecValidation.SUPPORTED_SPEC_VERSIONS);
         }
         specVersion = specVersion.trim();
+        SpecValidation.validateSerialNumberMode(serialNumberMode);
+        // Fail fast on a malformed timestamp or size limit instead of failing after resolution work.
+        SpecValidation.parseOutputTimestamp(outputTimestamp);
+        SpecValidation.parseMaxBytes(maxInputSize == null || maxInputSize.trim().isEmpty()
+                ? "50MB"
+                : maxInputSize);
         outputExtension = outputExtension();
         if (outputExtension == null || outputExtension.isEmpty()) {
             throw new MojoExecutionException("outputExtension must be set to 'json' or 'xml'");
@@ -527,6 +563,117 @@ public class AggregateSbomMojo extends AbstractMojo {
         getLog().debug("Generated SBOM: " + outputFile.length() + " bytes");
     }
 
+    /**
+     * Parses a single input SBOM. The configured {@code maxInputSize} is enforced <em>before</em> the
+     * parser runs so an oversized (or malicious) document cannot exhaust the heap. Entity resolution is
+     * left to the CycloneDX parsers, which disable DTD and external entity processing.
+     *
+     * @param file SBOM file, JSON unless the name ends with {@code .xml}
+     * @return the parsed BOM
+     * @throws MojoExecutionException when the file is too large or cannot be parsed
+     */
+    Bom parseSbom(File file) throws MojoExecutionException {
+        long maxBytes = SpecValidation.parseMaxBytes(
+                maxInputSize == null || maxInputSize.trim().isEmpty() ? "50MB" : maxInputSize);
+        if (maxBytes > 0 && file.length() > maxBytes) {
+            throw new MojoExecutionException("Refusing to parse SBOM " + file.getAbsolutePath() + ": "
+                    + file.length() + " bytes exceeds the configured maxInputSize of " + maxBytes
+                    + " bytes (" + maxInputSize + ")");
+        }
+        try {
+            if (file.getName().toLowerCase(Locale.ROOT).endsWith(".xml")) {
+                return new XmlParser().parse(file);
+            }
+            return new JsonParser().parse(file);
+        } catch (Exception e) {
+            getLog().error("Failed to parse SBOM file: " + file.getAbsolutePath(), e);
+            throw new MojoExecutionException("Error parsing SBOM " + file.getAbsolutePath() + ": "
+                    + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * @return the timestamp to stamp on the aggregated BOM, or {@code null} when the current time
+     *         should be used (no {@code outputTimestamp} configured)
+     * @throws MojoExecutionException when the configured timestamp cannot be parsed
+     */
+    Date outputDate() throws MojoExecutionException {
+        Instant instant = SpecValidation.parseOutputTimestamp(outputTimestamp);
+        return instant == null ? null : Date.from(instant);
+    }
+
+    /**
+     * Applies the configured {@code serialNumberMode} to the merged BOM.
+     *
+     * @param bom merged BOM
+     * @throws MojoExecutionException when the configured mode is not supported
+     */
+    void applySerialNumber(Bom bom) throws MojoExecutionException {
+        String mode = serialNumberMode == null || serialNumberMode.trim().isEmpty()
+                ? "deterministic"
+                : serialNumberMode.trim().toLowerCase(Locale.ROOT);
+        SpecValidation.validateSerialNumberMode(mode);
+        if (bom.getMetadata() == null) {
+            bom.setMetadata(new Metadata());
+        }
+        switch (mode) {
+            case "none":
+                bom.setSerialNumber(null);
+                break;
+            case "random":
+                bom.setSerialNumber("urn:uuid:" + UUID.randomUUID());
+                break;
+            default:
+                bom.setSerialNumber(SbomMerger.deterministicSerialNumber(bom));
+                break;
+        }
+        getLog().debug("Serial number mode: " + mode + " -> " + bom.getSerialNumber());
+    }
+
+    /**
+     * Validates a written aggregated SBOM against the CycloneDX schema of the configured spec version.
+     * Does nothing when {@code validateOutput} is {@code false}. At most 10 problems are reported so a
+     * broken document does not flood the build log.
+     *
+     * @param outputFile the file that was just written
+     * @throws MojoExecutionException when the document is not schema valid
+     */
+    void validateWrittenOutput(File outputFile) throws MojoExecutionException {
+        if (!validateOutput) {
+            getLog().debug("Skipping output validation (validateOutput=false)");
+            return;
+        }
+        Version targetVersion = SpecValidation.toCycloneDxVersion(specVersion);
+        List<ParseException> problems;
+        try {
+            if ("json".equals(outputExtension())) {
+                problems = new JsonParser().validate(outputFile, targetVersion);
+            } else {
+                problems = new XmlParser().validate(outputFile, targetVersion);
+            }
+        } catch (IOException e) {
+            throw new MojoExecutionException("Failed to validate aggregated SBOM " + outputFile.getName()
+                    + ": " + e.getMessage(), e);
+        }
+        if (problems == null || problems.isEmpty()) {
+            getLog().debug("Aggregated SBOM is valid CycloneDX " + specVersion);
+            return;
+        }
+        StringBuilder message = new StringBuilder("Aggregated SBOM " + outputFile.getName()
+                + " does not validate against CycloneDX " + specVersion + ":");
+        int limit = Math.min(problems.size(), 10);
+        for (int i = 0; i < limit; i++) {
+            message.append(System.lineSeparator()).append("  - ").append(problems.get(i).getMessage());
+        }
+        if (problems.size() > limit) {
+            message.append(System.lineSeparator()).append("  ... and ")
+                    .append(problems.size() - limit).append(" more problem(s)");
+        }
+        message.append(System.lineSeparator())
+                .append("Use -DsbomAggregator.validateOutput=false to skip this check.");
+        throw new MojoExecutionException(message.toString());
+    }
+
     // Package-private setters for unit tests.
 
     void setSpecVersion(String specVersion) {
@@ -560,4 +707,8 @@ public class AggregateSbomMojo extends AbstractMojo {
     void setIncludeTransitive(boolean includeTransitive) { this.includeTransitive = includeTransitive; }
     void setIncludeScopes(List<String> includeScopes) { this.includeScopes = includeScopes; }
     void setExcludes(List<String> excludes) { this.excludes = excludes; }
+    void setOutputTimestamp(String outputTimestamp) { this.outputTimestamp = outputTimestamp; }
+    void setSerialNumberMode(String serialNumberMode) { this.serialNumberMode = serialNumberMode; }
+    void setValidateOutput(boolean validateOutput) { this.validateOutput = validateOutput; }
+    void setMaxInputSize(String maxInputSize) { this.maxInputSize = maxInputSize; }
 }

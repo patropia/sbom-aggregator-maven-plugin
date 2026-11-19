@@ -66,7 +66,12 @@ class ParameterPropertyNamingTest {
             "excludes",
             "failOnMissingSbom",
             "attach",
-            "skip"));
+            "skip",
+            /* M3 parameters */
+            "outputTimestamp",
+            "serialNumberMode",
+            "validateOutput",
+            "maxInputSize"));
 
     private static Element mojo;
 

@@ -1,6 +1,7 @@
 # SBOM Aggregator Maven Plugin
 
 [![CI](https://github.com/patropia/sbom-aggregator-maven-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/patropia/sbom-aggregator-maven-plugin/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/patropia/sbom-aggregator-maven-plugin/actions/workflows/codeql.yml/badge.svg)](https://github.com/patropia/sbom-aggregator-maven-plugin/actions/workflows/codeql.yml)
 [![Maven Central](https://img.shields.io/maven-central/v/nl.patropia.maven.plugin/sbom-aggregator-maven-plugin.svg?label=Maven%20Central)](https://search.maven.org/search?q=g:%22nl.patropia.maven.plugin%22%20AND%20a:%22sbom-aggregator-maven-plugin%22)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0.txt)
 
@@ -72,6 +73,10 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
 | `skip` | `sbomAggregator.skip` | `boolean` | `false` | Skip execution of the plugin. |
 | `specVersion` | `sbomAggregator.specVersion` | `String` | `1.5` | Target CycloneDX specification version (`1.3`, `1.4`, `1.5`, `1.6`, `1.7`). |
 | `failOnMissingSbom` | `sbomAggregator.failOnMissingSbom` | `boolean` | `false` | Fails the build if any collected dependency (direct, plus transitive when `includeTransitive=true`) fails to provide an attached SBOM. |
+| `outputTimestamp` | `sbomAggregator.outputTimestamp` | `String` | `${project.build.outputTimestamp}` | Controls the timestamp written to the merged SBOM's metadata. Use an ISO-8601 instant like `2024-01-01T00:00:00Z`, epoch seconds, or leave unset to use the current time. |
+| `serialNumberMode` | `sbomAggregator.serialNumberMode` | `String` | `deterministic` | Serial number generation mode: `deterministic`, `random`, or `none`. Deterministic produces a stable urn:uuid derived from BOM content. |
+| `validateOutput` | `sbomAggregator.validateOutput` | `boolean` | `true` | When `true`, the generated merged SBOM is validated against the CycloneDX schema for the selected `specVersion`. Validation failures fail the build. |
+| `maxInputSize` | `sbomAggregator.maxInputSize` | `String` | `50MB` | Maximum size of an input SBOM to parse; accepts `KB`, `MB`, `GB` suffixes. Files larger than this limit are rejected before parsing to mitigate DoS. |
 
 ---
 
@@ -241,6 +246,14 @@ mvn clean install
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+Before you start, please read [CONTRIBUTING.md](CONTRIBUTING.md) (build and test
+instructions, coding conventions and commit style) and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+**Security:** please do **not** open public issues for security problems. Report
+vulnerabilities privately as described in [SECURITY.md](SECURITY.md) so a fix can
+be prepared before disclosure.
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)

@@ -20,8 +20,15 @@ import org.cyclonedx.model.Bom;
 import org.cyclonedx.model.Component;
 import org.cyclonedx.model.Dependency;
 import org.cyclonedx.model.Metadata;
+import org.cyclonedx.model.vulnerability.Vulnerability;
+import org.cyclonedx.model.vulnerability.Vulnerability.Affect;
+import org.cyclonedx.model.vulnerability.Vulnerability.Source;
+import org.cyclonedx.model.vulnerability.Vulnerability.Version;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -30,6 +37,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Merges several CycloneDX {@link Bom}s into one aggregated BOM that describes the project
@@ -147,6 +155,23 @@ public final class SbomMerger {
                             String rootVersion,
                             List<Bom> parsedBoms,
                             List<MissingDependency> missingDeps) {
+        return merge(rootGroupId, rootArtifactId, rootVersion, parsedBoms, missingDeps, null);
+    }
+
+    /**
+     * Merges the given BOMs like {@link #merge(String, String, String, List, List)} and, when
+     * {@code timestamp} is not {@code null}, stamps the merged BOM's metadata with it so that the
+     * generated document is reproducible.
+     *
+     * @param timestamp metadata timestamp to use; {@code null} keeps the library default ("now")
+     * @return an aggregated BOM whose metadata component is the project
+     */
+    public static Bom merge(String rootGroupId,
+                            String rootArtifactId,
+                            String rootVersion,
+                            List<Bom> parsedBoms,
+                            List<MissingDependency> missingDeps,
+                            Date timestamp) {
         Objects.requireNonNull(rootGroupId, "rootGroupId must not be null");
         Objects.requireNonNull(rootArtifactId, "rootArtifactId must not be null");
         Objects.requireNonNull(rootVersion, "rootVersion must not be null");
@@ -160,6 +185,9 @@ public final class SbomMerger {
         Bom out = new Bom();
         Metadata metadata = new Metadata();
         metadata.setComponent(buildRoot(rootGroupId, rootArtifactId, rootVersion, rootRef));
+        if (timestamp != null) {
+            metadata.setTimestamp(timestamp);
+        }
         out.setMetadata(metadata);
 
         State state = new State(rootRef, rootGav);
@@ -276,7 +304,207 @@ public final class SbomMerger {
 
         out.setComponents(new ArrayList<>(state.merged.values()));
         out.setDependencies(dependencies);
+
+        // 6. vulnerabilities: rewrite affects refs per input BOM, de-duplicate and merge
+        Map<String, Vulnerability> vulns = new LinkedHashMap<>();
+        int anonCounter = 0;
+        for (int i = 0; i < boms.size(); i++) {
+            Bom bom = boms.get(i);
+            Map<String, String> localMap = localMaps.get(i);
+            List<Vulnerability> in = bom.getVulnerabilities();
+            if (in == null) {
+                continue;
+            }
+            for (Vulnerability v : in) {
+                // rewrite affects
+                List<Affect> affects = v.getAffects();
+                List<Affect> newAffects = new ArrayList<>();
+                if (affects != null) {
+                    Map<String, Affect> byRef = new LinkedHashMap<>();
+                    for (Affect a : affects) {
+                        String resolved = state.resolve(a.getRef(), localMap);
+                        if (resolved == null) {
+                            continue; // drop dangling affect
+                        }
+                        Affect existing = byRef.get(resolved);
+                        if (existing == null) {
+                            Affect copy = new Affect();
+                            copy.setRef(resolved);
+                            if (a.getVersions() != null) {
+                                copy.setVersions(new ArrayList<>(a.getVersions()));
+                            }
+                            byRef.put(resolved, copy);
+                        } else {
+                            // merge versions
+                            mergeVersions(existing, a.getVersions());
+                        }
+                    }
+                    newAffects.addAll(byRef.values());
+                }
+                if ((affects != null && newAffects.isEmpty())) {
+                    // originally had affects but none survived -> drop this vulnerability
+                    continue;
+                }
+
+                // dedupe vulnerabilities by id|source
+                String id = v.getId();
+                Source src = v.getSource();
+                String sourceKey = src == null ? "" : (src.getName() == null ? (src.getUrl() == null ? "" : src.getUrl()) : src.getName());
+                String key;
+                if (isBlank(id)) {
+                    anonCounter++;
+                    key = "\u0000anon#" + anonCounter;
+                } else {
+                    key = id + "|" + sourceKey;
+                }
+                Vulnerability keeper = vulns.get(key);
+                if (keeper == null) {
+                    // make a shallow copy to avoid mutating input objects
+                    Vulnerability copy = new Vulnerability();
+                    copy.setId(v.getId());
+                    copy.setBomRef(v.getBomRef());
+                    copy.setSource(v.getSource());
+                    copy.setDescription(v.getDescription());
+                    copy.setRecommendation(v.getRecommendation());
+                    copy.setDetail(v.getDetail());
+                    copy.setAnalysis(v.getAnalysis());
+                    if (v.getRatings() != null) copy.setRatings(new ArrayList<>(v.getRatings()));
+                    if (v.getCwes() != null) copy.setCwes(new ArrayList<>(v.getCwes()));
+                    if (v.getAdvisories() != null) copy.setAdvisories(new ArrayList<>(v.getAdvisories()));
+                    if (v.getReferences() != null) copy.setReferences(new ArrayList<>(v.getReferences()));
+                    if (v.getProperties() != null) copy.setProperties(new ArrayList<>(v.getProperties()));
+                    copy.setAffects(newAffects.isEmpty() ? null : newAffects);
+
+                    // ensure unique bom-ref
+                    String bomRef = copy.getBomRef();
+                    if (!isBlank(bomRef) && state.usedRefs.contains(bomRef)) {
+                        // rename
+                        String base = isBlank(copy.getId()) ? "vuln" : copy.getId();
+                        String unique = base;
+                        int counter = 2;
+                        while (state.usedRefs.contains(unique)) {
+                            unique = base + "#" + counter;
+                            counter++;
+                        }
+                        copy.setBomRef(unique);
+                    }
+                    if (!isBlank(copy.getBomRef())) {
+                        state.usedRefs.add(copy.getBomRef());
+                    }
+
+                    vulns.put(key, copy);
+                } else {
+                    // merge into keeper
+                    if (keeper.getAffects() == null && !newAffects.isEmpty()) {
+                        keeper.setAffects(new ArrayList<>());
+                    }
+                    if (!newAffects.isEmpty()) {
+                        Map<String, Affect> existingByRef = new LinkedHashMap<>();
+                        List<Affect> keeperAffects = keeper.getAffects();
+                        if (keeperAffects == null) keeperAffects = new ArrayList<>();
+                        for (Affect a : keeperAffects) {
+                            existingByRef.put(a.getRef(), a);
+                        }
+                        for (Affect a : newAffects) {
+                            Affect ex = existingByRef.get(a.getRef());
+                            if (ex == null) {
+                                keeper.getAffects().add(a);
+                            } else {
+                                mergeVersions(ex, a.getVersions());
+                            }
+                        }
+                    }
+
+                    // merge lists: ratings, cwes, advisories, references, properties
+                    if (v.getRatings() != null) {
+                        if (keeper.getRatings() == null) keeper.setRatings(new ArrayList<>());
+                        for (var r : v.getRatings()) if (!keeper.getRatings().contains(r)) keeper.getRatings().add(r);
+                    }
+                    if (v.getCwes() != null) {
+                        if (keeper.getCwes() == null) keeper.setCwes(new ArrayList<>());
+                        for (var c : v.getCwes()) if (!keeper.getCwes().contains(c)) keeper.getCwes().add(c);
+                    }
+                    if (v.getAdvisories() != null) {
+                        if (keeper.getAdvisories() == null) keeper.setAdvisories(new ArrayList<>());
+                        for (var a : v.getAdvisories()) if (!keeper.getAdvisories().contains(a)) keeper.getAdvisories().add(a);
+                    }
+                    if (v.getReferences() != null) {
+                        if (keeper.getReferences() == null) keeper.setReferences(new ArrayList<>());
+                        for (var ref : v.getReferences()) if (!keeper.getReferences().contains(ref)) keeper.getReferences().add(ref);
+                    }
+                    if (v.getProperties() != null) {
+                        if (keeper.getProperties() == null) keeper.setProperties(new ArrayList<>());
+                        for (var p : v.getProperties()) if (!keeper.getProperties().contains(p)) keeper.getProperties().add(p);
+                    }
+
+                    // fill scalar gaps
+                    if (keeper.getAnalysis() == null) keeper.setAnalysis(v.getAnalysis());
+                    if (keeper.getDescription() == null) keeper.setDescription(v.getDescription());
+                    if (keeper.getDetail() == null) keeper.setDetail(v.getDetail());
+                    if (keeper.getRecommendation() == null) keeper.setRecommendation(v.getRecommendation());
+                }
+            }
+        }
+
+        out.setVulnerabilities(vulns.isEmpty() ? null : new ArrayList<>(vulns.values()));
+
+
         return out;
+    }
+
+    /**
+     * Returns a deterministic serial number for the merged BOM. The returned value is a URN UUID
+     * generated from a canonical byte representation built from the root purl, the sorted list
+     * of component identifiers (purl or bom-ref) with their versions, and the sorted list of
+     * dependency edges. This avoids including timestamps or input ordering in the serial.
+     *
+     * @param merged aggregated BOM
+     * @return serial number like "urn:uuid:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" or null if merged is null
+     */
+    public static String deterministicSerialNumber(Bom merged) {
+        if (merged == null) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        Metadata metadata = merged.getMetadata();
+        if (metadata != null && metadata.getComponent() != null) {
+            String rootPurl = metadata.getComponent().getPurl();
+            if (rootPurl != null) {
+                sb.append("root:").append(rootPurl).append('\n');
+            }
+        }
+        List<String> compKeys = new ArrayList<>();
+        if (merged.getComponents() != null) {
+            for (Component c : merged.getComponents()) {
+                String id = c.getPurl() != null ? c.getPurl() : c.getBomRef();
+                if (id == null) id = "";
+                String ver = c.getVersion() != null ? c.getVersion() : "";
+                compKeys.add(id + "|" + ver);
+            }
+        }
+        Collections.sort(compKeys);
+        for (String k : compKeys) {
+            sb.append("comp:").append(k).append('\n');
+        }
+        List<String> edges = new ArrayList<>();
+        if (merged.getDependencies() != null) {
+            for (Dependency d : merged.getDependencies()) {
+                if (d.getDependencies() != null) {
+                    for (Dependency child : d.getDependencies()) {
+                        String parent = d.getRef() == null ? "" : d.getRef();
+                        String childRef = child.getRef() == null ? "" : child.getRef();
+                        edges.add(parent + "->" + childRef);
+                    }
+                }
+            }
+        }
+        Collections.sort(edges);
+        for (String e : edges) {
+            sb.append("edge:").append(e).append('\n');
+        }
+        byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+        UUID uuid = UUID.nameUUIDFromBytes(bytes);
+        return "urn:uuid:" + uuid.toString();
     }
 
     private static Component buildRoot(String groupId, String artifactId, String version, String purl) {
