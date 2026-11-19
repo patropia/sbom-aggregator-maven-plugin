@@ -1,155 +1,81 @@
-# Agent Instructions for SBOM Aggregator Maven Plugin
+# Agent instructions for SBOM Aggregator Maven Plugin
 
-## Project Overview
+This document is for contributors and agents working on the sbom-aggregator-maven-plugin repository. It documents the project layout, the responsibilities of the main classes, the current integration tests and the public configuration parameters.
 
-This is a Maven plugin that aggregates CycloneDX Software Bill of Materials (SBOMs) from dependent projects. It's designed for Software Composition Analysis (SCA) in large multi-repository software projects.
+Project structure (important files only):
 
-**Key Technologies:**
-- Java 17+
-- Maven 3.9.x+
-- CycloneDX Core Java library
-- Maven Plugin API
+- src/main/java/nl/patropia/maven/plugin/
+  - AggregateSbomMojo.java       # Mojo: orchestrates dependency collection, SBOM resolution, merging and output
+  - SbomMerger.java              # Pure merge logic: merges multiple CycloneDX Bom objects and synthesises placeholders
+  - SpecValidation.java          # Spec version and output-format validation + helper conversions
+- src/test/java/...              # Unit tests (AggregateSbomMojoTest, SbomMergerTest, SpecValidationTest)
+- src/it/                        # Maven-Invoker integration tests (each folder is a standalone test)
+- README.md                      # User-facing documentation (configuration table is authoritative)
+- CHANGELOG.md                   # Release notes
+- pom.xml                        # Build configuration and plugin coordinates
 
-## Project Structure
+Core responsibilities
 
-```
-sbom-aggregator-maven-plugin/
-├── src/
-│   ├── main/java/nl/patropia/maven/plugin/
-│   │   └── AggregateSbomMojo.java          # Main plugin implementation
-│   ├── test/java/nl/patropia/maven/plugin/
-│   │   └── AggregateSbomMojoTest.java      # Unit tests
-│   └── it/                                  # Integration tests
-│       ├── invoker-settings.xml
-│       └── simple-integration-test/
-│           ├── pom.xml
-│           ├── invoker.properties
-│           ├── verify.groovy
-│           └── src/sbom/base-bom.json
-├── pom.xml                                  # Project build configuration
-└── README.md                                # User documentation
-```
+- AggregateSbomMojo: collects dependency coordinates (direct and optionally transitive), resolves attached SBOM artifacts, delegates parsing and merging to SbomMerger, writes output and optionally attaches it to the Maven project.
+- SbomMerger: performs the in-memory merge and synthesises placeholder components for missing SBOMs. Keep merge-related unit tests here.
+- SpecValidation: validate supported CycloneDX spec versions and the output extension.
 
-## Core Functionality
+Integration tests (invoker)
 
-The plugin performs these operations:
-1. Reads a base project SBOM (CycloneDX format)
-2. Resolves SBOMs from all Maven dependencies
-3. Merges them in-memory using `cyclonedx-core-java`
-4. Builds a hierarchical dependency tree
-5. Detects missing SBOMs and creates placeholder components
-6. Outputs an aggregated SBOM in the specified CycloneDX version
+The integration tests are under src/it and use the Maven Invoker plugin. Each test folder contains a pom.xml, a setup.groovy (if needed) and verify.groovy. Current important tests:
 
-## Development Commands
+- simple-integration-test
+- attach-test
+- transitive-test                # verifies transitive SBOM resolution + excludes behaviour
+- transitive-disabled-test       # verifies behaviour when includeTransitive=false
+(see src/it/ for the complete list)
 
-**Build and test:**
-```bash
-mvn clean verify -Prun-its
-```
+Public configuration parameters (user properties)
 
-**Run unit tests only:**
-```bash
-mvn test
-```
+The README.md is the authoritative source used by unit tests for parameter names. The plugin exposes the following configuration parameters, each of which can be set via the corresponding user property (-D):
 
-**Install locally:**
-```bash
-mvn clean install
-```
+- projectSbom                -> sbomAggregator.projectSbom (File)          Default: ${project.build.directory}/bom.json
+- outputDirectory            -> sbomAggregator.outputDirectory (File)      Default: ${project.build.directory}
+- dependencyClassifiers      -> sbomAggregator.dependencyClassifiers (List<String>) Default: ["cyclonedx"]
+- dependencyExtensions       -> sbomAggregator.dependencyExtensions (List<String>)  Default: ["json","xml"]
+- includeTransitive          -> sbomAggregator.includeTransitive (boolean)  Default: false
+- includeScopes              -> sbomAggregator.includeScopes (List<String>) Default: [compile,runtime]
+- excludes                   -> sbomAggregator.excludes (List<String>)     Default: (empty)
+- outputClassifier           -> sbomAggregator.outputClassifier (String)   Default: cyclonedx
+- outputExtension            -> sbomAggregator.outputExtension (String)    Default: json
+- outputName                 -> sbomAggregator.outputName (String)         Default: aggregated-bom
+- attach                     -> sbomAggregator.attach (boolean)             Default: true
+- skip                       -> sbomAggregator.skip (boolean)               Default: false
+- specVersion                -> sbomAggregator.specVersion (String)        Default: 1.5
+- failOnMissingSbom          -> sbomAggregator.failOnMissingSbom (boolean) Default: false
 
-## Configuration Parameters
+Note: legacy parameter names sbomClassifier and sbomExtension were removed; do not use them.
 
-When editing `AggregateSbomMojo.java`, be aware of these configurable parameters:
+Adding a new configuration parameter
 
-- `projectSbom` (File): Path to base SBOM, default: `${project.build.directory}/bom.json`
-- `outputDirectory` (File): Output directory, default: `${project.build.directory}`
-- `sbomClassifier` (String): Artifact classifier, default: `cyclonedx`
-- `sbomExtension` (String): File format, default: `json`
-- `specVersion` (String): CycloneDX spec version, default: `1.5` (supports 1.3-1.7)
-- `failOnMissingSbom` (boolean): Fail build on missing SBOM, default: `false`
+1. Add an @Parameter field to AggregateSbomMojo.java with a property name beginning with sbomAggregator. For example: @Parameter(property = "sbomAggregator.myParam")
+2. Update README.md's configuration table (unit tests read README.md to validate parameter names)
+3. Add validation/usage code in the Mojo and add unit tests
 
-## Code Conventions
+Modifying merge logic
 
-- **Language Level:** Java 17
-- **Maven Annotations:** Use `@Mojo`, `@Parameter`, `@Component` annotations
-- **Logging:** Use Maven's `getLog()` for info, warn, error messages
-- **Error Handling:** Throw `MojoExecutionException` for execution failures, `MojoFailureException` for validation failures
-- **Testing:** Use JUnit for unit tests, Maven Invoker for integration tests
+All SBOM merging and placeholder synthesis lives in SbomMerger.java and associated unit tests. To change the merging behaviour, edit SbomMerger and update SbomMergerTest.
 
-## Key Dependencies
+Running tests
 
-- `org.cyclonedx:cyclonedx-core-java` - SBOM parsing and merging
-- `org.apache.maven:maven-plugin-api` - Maven plugin framework
-- `org.apache.maven:maven-core` - Maven project model
-- `org.apache.maven.plugin-tools:maven-plugin-annotations` - Plugin metadata
+- Unit tests: mvn test
+- Integration tests (invoker): mvn clean verify -Prun-its
 
-## Integration Testing
+Developer notes
 
-Integration tests use Maven Invoker Plugin:
-- Located in `src/it/`
-- Each test has its own `pom.xml` and `verify.groovy` script
-- Run with `-Prun-its` profile
-- Tests verify the plugin works in real Maven builds
+- Output files are written under ${project.build.directory} by default. The plugin will attach the aggregated SBOM as an artifact with classifier outputClassifier and extension outputExtension unless attach=false.
+- When adding or altering integration tests under src/it, ensure setup.groovy creates a file:// repository layout that matches Maven's groupId -> path conversion (dots become directories). A common pitfall is writing groupId paths with dots instead of directories.
 
-## Common Tasks
+Deprecated / removed items
 
-**Adding a new configuration parameter:**
-1. Add `@Parameter` annotated field to `AggregateSbomMojo.java`
-2. Update README.md configuration table
-3. Add validation logic in `execute()` method
-4. Add unit test coverage
+- sbomClassifier and sbomExtension have been removed from the public configuration and the codebase; references were deleted. Marked as removed here and should not be reintroduced.
 
-**Modifying SBOM merging logic:**
-1. Edit the merge logic in `AggregateSbomMojo.java`
-2. Update unit tests in `AggregateSbomMojoTest.java`
-3. Add/update integration test if behavior changes
-4. Test with `mvn clean verify -Prun-its`
+Contact / Help
 
-**Supporting a new CycloneDX version:**
-1. Update `specVersion` parameter validation
-2. Test with new version in integration tests
-3. Update README.md supported versions list
+If you are stuck, open an issue on GitHub or ping the maintainer via the repository issues page.
 
-## Important Notes
-
-- The plugin uses in-memory merging (no external CLI tools)
-- Missing SBOMs generate warnings and placeholder components
-- Hierarchical dependency tree is maintained in the output
-- Output format matches the specified CycloneDX spec version
-- Direct dependencies without SBOMs can optionally fail the build
-
-## Upstream Integration
-
-For this plugin to work, upstream projects must attach their SBOMs using:
-```xml
-<plugin>
-    <groupId>org.cyclonedx</groupId>
-    <artifactId>cyclonedx-maven-plugin</artifactId>
-    <configuration>
-        <attach>true</attach>
-    </configuration>
-</plugin>
-```
-
-## Deployment
-
-The project is configured for deployment to Maven Central via GitHub Actions.
-
-**Release Process:**
-1. Update version in `pom.xml` (remove `-SNAPSHOT`)
-2. Update `CHANGELOG.md` with release notes
-3. Create and push a git tag: `git tag -a v1.0.0 -m "Release 1.0.0" && git push origin v1.0.0`
-4. GitHub Actions will automatically build, test, sign, and deploy to Maven Central
-5. After release, bump version to next `-SNAPSHOT` version
-
-**Required GitHub Secrets:**
-- `CENTRAL_TOKEN_USERNAME` - Sonatype Central Portal user-token username
-- `CENTRAL_TOKEN_PASSWORD` - Sonatype Central Portal user-token password
-- `GPG_PRIVATE_KEY` - Base64-encoded GPG private key
-- `GPG_PASSPHRASE` - GPG key passphrase
-
-See `DEPLOYMENT.md` for detailed deployment instructions.
-
-## License
-
-Apache License 2.0 - ensure all new files include proper license headers.
