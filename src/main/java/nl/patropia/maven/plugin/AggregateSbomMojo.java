@@ -40,6 +40,12 @@ import org.eclipse.aether.artifact.Artifact;
 import org.eclipse.aether.artifact.DefaultArtifact;
 import org.eclipse.aether.resolution.ArtifactRequest;
 import org.eclipse.aether.resolution.ArtifactResult;
+import org.eclipse.aether.resolution.ArtifactResolutionException;
+import org.eclipse.aether.transfer.ArtifactNotFoundException;
+
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.regex.Pattern;
 
 import java.io.File;
 import java.io.IOException;
@@ -97,6 +103,24 @@ public class AggregateSbomMojo extends AbstractMojo {
      */
     @Parameter(property = "dependencyExtensions")
     private List<String> dependencyExtensions;
+
+    /**
+     * Include transitive dependencies when resolving attached SBOMs. Defaults to false (only direct deps).
+     */
+    @Parameter(property = "sbomAggregator.includeTransitive", defaultValue = "false")
+    boolean includeTransitive;
+
+    /**
+     * Scopes to include when collecting dependencies. Null or empty -> ["compile","runtime"].
+     */
+    @Parameter(property = "sbomAggregator.includeScopes")
+    List<String> includeScopes;
+
+    /**
+     * Exclude patterns in the form groupId:artifactId where '*' may be used as a wildcard. Only group:artifact part is matched.
+     */
+    @Parameter(property = "sbomAggregator.excludes")
+    List<String> excludes;
 
     /**
      * Classifier for the output aggregated SBOM artifact.
@@ -193,16 +217,16 @@ public class AggregateSbomMojo extends AbstractMojo {
 
         List<SbomMerger.MissingDependency> missingSboms = new ArrayList<>();
 
-        // 2. Resolve dependency SBOM artifacts
-        for (org.apache.maven.model.Dependency dep : project.getDependencies()) {
-            String depId = dep.getGroupId() + ":" + dep.getArtifactId() + ":" + dep.getVersion();
+        // 2. Resolve dependency SBOM artifacts using collected dependency coordinates
+        for (DepCoord dep : collectDependencyCoords()) {
+            String depId = dep.groupId + ":" + dep.artifactId + ":" + dep.version;
             boolean resolved = false;
 
             // Try each combination of extension and classifier
             for (String extension : dependencyExtensions) {
                 for (String classifier : dependencyClassifiers) {
                     String artifactCoords = String.format("%s:%s:%s:%s:%s",
-                            dep.getGroupId(), dep.getArtifactId(), extension, classifier, dep.getVersion());
+                            dep.groupId, dep.artifactId, extension, classifier, dep.version);
 
                     Artifact sbomArtifact = new DefaultArtifact(artifactCoords);
                     ArtifactRequest request = new ArtifactRequest();
@@ -218,8 +242,13 @@ public class AggregateSbomMojo extends AbstractMojo {
                             resolved = true;
                             break; // Stop trying other classifiers once we find one
                         }
-                    } catch (Exception e) {
-                        getLog().debug("Could not resolve SBOM with " + extension + ":" + classifier + " for: " + depId);
+                    } catch (ArtifactResolutionException e) {
+                        Throwable cause = e.getCause();
+                        if (cause instanceof ArtifactNotFoundException) {
+                            getLog().debug("SBOM not found for " + depId + " with " + extension + ":" + classifier + " - " + e.getMessage());
+                        } else {
+                            getLog().warn("Failed to resolve SBOM for " + depId + " - " + e.getMessage());
+                        }
                     }
                 }
                 if (resolved) {
@@ -229,7 +258,7 @@ public class AggregateSbomMojo extends AbstractMojo {
 
             if (!resolved) {
                 missingSboms.add(new SbomMerger.MissingDependency(
-                        dep.getGroupId(), dep.getArtifactId(), dep.getVersion()));
+                        dep.groupId, dep.artifactId, dep.version));
                 getLog().warn("MISSING SBOM: Could not resolve attached SBOM for dependency [" + depId + "]");
             }
         }
@@ -306,6 +335,96 @@ public class AggregateSbomMojo extends AbstractMojo {
             } catch (Exception e) {
                 throw new MojoExecutionException("Failed to attach aggregated SBOM to project", e);
             }
+        }
+    }
+
+    /**
+     * Collect dependency coordinates from the project according to includeTransitive, includeScopes and excludes.
+     * Returns a list preserving first-seen order and deduped by group:artifact:version.
+     */
+    List<DepCoord> collectDependencyCoords() {
+        List<DepCoord> coords = new ArrayList<>();
+
+        // Prepare scopes default
+        List<String> scopesToUse = includeScopes == null || includeScopes.isEmpty()
+                ? List.of("compile", "runtime")
+                : includeScopes;
+
+        // Build exclude patterns
+        List<Pattern> excludePatterns = new ArrayList<>();
+        if (excludes != null) {
+            for (String ex : excludes) {
+                if (ex == null || ex.trim().isEmpty()) continue;
+                String trimmed = ex.trim();
+                // Escape dots and other regex characters except '*' which we translate to '.*'
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < trimmed.length(); i++) {
+                    char c = trimmed.charAt(i);
+                    if (c == '*') {
+                        sb.append(".*");
+                    } else {
+                        sb.append(Pattern.quote(String.valueOf(c)));
+                    }
+                }
+                excludePatterns.add(Pattern.compile(sb.toString()));
+            }
+        }
+
+        // Use a LinkedHashMap to dedupe while preserving order: key -> DepCoord
+        LinkedHashMap<String, DepCoord> map = new LinkedHashMap<>();
+
+        if (includeTransitive) {
+            // Use the project's resolved artifacts
+            for (org.apache.maven.artifact.Artifact a : project.getArtifacts()) {
+                String scope = a.getScope();
+                if (scope == null) scope = "compile";
+                if (!scopesToUse.contains(scope)) continue;
+                String key = a.getGroupId() + ":" + a.getArtifactId() + ":" + a.getVersion();
+                String ga = a.getGroupId() + ":" + a.getArtifactId();
+                boolean excluded = false;
+                for (Pattern p : excludePatterns) {
+                    if (p.matcher(ga).matches()) {
+                        excluded = true;
+                        break;
+                    }
+                }
+                if (excluded) continue;
+                map.putIfAbsent(key, new DepCoord(a.getGroupId(), a.getArtifactId(), a.getVersion(), scope));
+            }
+        } else {
+            for (org.apache.maven.model.Dependency d : project.getDependencies()) {
+                String scope = d.getScope();
+                if (scope == null) scope = "compile";
+                if (!scopesToUse.contains(scope)) continue;
+                String key = d.getGroupId() + ":" + d.getArtifactId() + ":" + d.getVersion();
+                String ga = d.getGroupId() + ":" + d.getArtifactId();
+                boolean excluded = false;
+                for (Pattern p : excludePatterns) {
+                    if (p.matcher(ga).matches()) {
+                        excluded = true;
+                        break;
+                    }
+                }
+                if (excluded) continue;
+                map.putIfAbsent(key, new DepCoord(d.getGroupId(), d.getArtifactId(), d.getVersion(), scope));
+            }
+        }
+
+        coords.addAll(map.values());
+        return coords;
+    }
+
+    static class DepCoord {
+        final String groupId;
+        final String artifactId;
+        final String version;
+        final String scope;
+
+        DepCoord(String groupId, String artifactId, String version, String scope) {
+            this.groupId = groupId;
+            this.artifactId = artifactId;
+            this.version = version;
+            this.scope = scope;
         }
     }
 
@@ -440,4 +559,10 @@ public class AggregateSbomMojo extends AbstractMojo {
     void setOutputName(String outputName) { this.outputName = outputName; }
 
     void setProjectHelper(MavenProjectHelper projectHelper) { this.projectHelper = projectHelper; }
+
+    // Package-private setters for new fields (used by unit tests)
+    void setIncludeTransitive(boolean includeTransitive) { this.includeTransitive = includeTransitive; }
+    void setIncludeScopes(List<String> includeScopes) { this.includeScopes = includeScopes; }
+    void setExcludes(List<String> excludes) { this.excludes = excludes; }
 }
+
