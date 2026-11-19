@@ -5,13 +5,16 @@ on:
     tags:
       - 'v*.*.*'
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
     
     permissions:
       contents: write
-      packages: write
     
     steps:
       - name: Checkout code
@@ -33,23 +36,26 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
       - name: Update version in pom.xml
-        run: mvn versions:set -DnewVersion=${{ steps.version.outputs.VERSION }} -DgenerateBackupPoms=false
+        id: set-version
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: mvn -B -ntp versions:set -DnewVersion="$VERSION" -DgenerateBackupPoms=false
 
       - name: Build and Test
-        run: mvn clean verify -Prun-its
+        run: mvn -B -ntp clean verify -Prun-its
 
       - name: Deploy to Maven Central
-        run: mvn deploy -DskipTests -P release
+        run: mvn -B -ntp deploy -DskipTests -P release
         env:
           MAVEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ steps.version.outputs.VERSION }}
           body: |
@@ -72,3 +78,8 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The duplicated Build/Deploy/Release block was removed to avoid running
+      # the deploy and release steps twice. The single Create Release step
+      # above uses the step output (steps.version.outputs.VERSION) which is
+      # visible to all subsequent steps.
