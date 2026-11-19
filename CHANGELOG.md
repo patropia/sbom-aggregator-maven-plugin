@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Publishing moved from OSSRH/Nexus staging to the Sonatype Central Portal
+  (`central-publishing-maven-plugin`); release secrets are now
+  `CENTRAL_TOKEN_USERNAME`/`CENTRAL_TOKEN_PASSWORD`.
+- Build now requires Maven >= 3.6.3 and Java >= 17 (enforced by
+  `maven-enforcer-plugin`); the compiler uses `maven.compiler.release=17`,
+  so builds on older toolchains fail fast instead of half-working.
+
+### Added
+- JaCoCo coverage report (`target/site/jacoco`), wired into `verify`.
+- Apache-2.0 license headers on all Java sources.
+- `Implementation-*` entries in the jar manifest.
+
 ## [1.0.0] - 2026-10-14
 
 ### Added

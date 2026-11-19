@@ -78,9 +78,9 @@ After release, verify the following:
 - Verify GPG credentials in GitHub Secrets:
   - `GPG_PRIVATE_KEY`: Base64-encoded private key
   - `GPG_PASSPHRASE`: Passphrase for the private key
-- Verify Sonatype OSSRH credentials in GitHub Secrets:
-  - `OSSRH_USERNAME`: Sonatype JIRA username
-  - `OSSRH_TOKEN`: Sonatype JIRA token
+- Verify Central Portal token credentials in GitHub Secrets:
+  - `CENTRAL_TOKEN_USERNAME`: Central Portal user token username
+  - `CENTRAL_TOKEN_PASSWORD`: Central Portal user token password
 - Ensure version in `pom.xml` doesn't have `-SNAPSHOT` suffix
 - Verify all tests pass before release
 
@@ -90,14 +90,13 @@ After release, verify the following:
 
 **Solutions**:
 - Wait 10-30 minutes for sync (can take up to 2 hours in rare cases)
-- Check Sonatype OSSRH repository status: https://s01.oss.sonatype.org/
-- Verify `nexus-staging-maven-plugin` configuration in `pom.xml`
-- Check if `autoReleaseAfterClose` is set to `true`
-- If needed, manually release from Sonatype OSSRH UI:
-  1. Login to https://s01.oss.sonatype.org/
-  2. Go to "Staging Repositories"
-  3. Find your repository
-  4. Click "Close" then "Release"
+- Check the deployment status at https://central.sonatype.com/publishing/deployments
+- Verify `central-publishing-maven-plugin` configuration in `pom.xml`
+- Check if `autoPublish` is set to `true`
+- If `autoPublish` is `false`, publish the validated deployment manually:
+  1. Login to https://central.sonatype.com/publishing/deployments
+  2. Open the pending deployment
+  3. Review the validation results and click "Publish"
 
 ### GPG signing fails
 
