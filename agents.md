@@ -143,8 +143,8 @@ The project is configured for deployment to Maven Central via GitHub Actions.
 5. After release, bump version to next `-SNAPSHOT` version
 
 **Required GitHub Secrets:**
-- `OSSRH_USERNAME` - Sonatype OSSRH username
-- `OSSRH_TOKEN` - Sonatype OSSRH token
+- `CENTRAL_TOKEN_USERNAME` - Sonatype Central Portal user-token username
+- `CENTRAL_TOKEN_PASSWORD` - Sonatype Central Portal user-token password
 - `GPG_PRIVATE_KEY` - Base64-encoded GPG private key
 - `GPG_PASSPHRASE` - GPG key passphrase
 
