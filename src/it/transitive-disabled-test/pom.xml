@@ -1,0 +1,53 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>nl.patropia.maven.it</groupId>
+    <artifactId>transitive-disabled-test</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <repositories>
+        <repository>
+            <id>it-file-repo</id>
+            <url>file://${project.basedir}/it-repo</url>
+        </repository>
+    </repositories>
+
+    <dependencies>
+        <dependency>
+            <groupId>it.transitive</groupId>
+            <artifactId>lib-a</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>it.transitive</groupId>
+            <artifactId>lib-t</artifactId>
+            <version>1.0.0</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>nl.patropia.maven.plugin</groupId>
+                <artifactId>sbom-aggregator-maven-plugin</artifactId>
+                <version>@project.version@</version>
+                <executions>
+                    <execution>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>aggregate-sboms</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <projectSbom>${project.basedir}/src/sbom/base-bom.json</projectSbom>
+                    <!-- includeTransitive intentionally left at its default (false) -->
+                    <failOnMissingSbom>false</failOnMissingSbom>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

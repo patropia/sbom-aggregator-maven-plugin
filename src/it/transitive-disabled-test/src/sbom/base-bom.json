@@ -1,0 +1,19 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "transitive-disabled-test"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "internal-component",
+      "version": "1.0.0",
+      "purl": "pkg:maven/nl.patropia/internal-component@1.0.0"
+    }
+  ]
+}
