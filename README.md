@@ -1,6 +1,7 @@
 # SBOM Aggregator Maven Plugin
 
 [![CI](https://github.com/patropia/sbom-aggregator-maven-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/patropia/sbom-aggregator-maven-plugin/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/patropia/sbom-aggregator-maven-plugin/actions/workflows/codeql.yml/badge.svg)](https://github.com/patropia/sbom-aggregator-maven-plugin/actions/workflows/codeql.yml)
 [![Maven Central](https://img.shields.io/maven-central/v/nl.patropia.maven.plugin/sbom-aggregator-maven-plugin.svg?label=Maven%20Central)](https://search.maven.org/search?q=g:%22nl.patropia.maven.plugin%22%20AND%20a:%22sbom-aggregator-maven-plugin%22)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0.txt)
 
@@ -241,6 +242,14 @@ mvn clean install
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+Before you start, please read [CONTRIBUTING.md](CONTRIBUTING.md) (build and test
+instructions, coding conventions and commit style) and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+
+**Security:** please do **not** open public issues for security problems. Report
+vulnerabilities privately as described in [SECURITY.md](SECURITY.md) so a fix can
+be prepared before disclosure.
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)

@@ -6,29 +6,44 @@ on:
   pull_request:
     branches: [ main ]
 
+# Superseded runs on the same ref are cancelled to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   build:
+    name: Build (Java ${{ matrix.java }})
     runs-on: ubuntu-latest
-    
+    strategy:
+      fail-fast: false
+      matrix:
+        # 17 is the minimum supported runtime (enforced by maven-enforcer-plugin),
+        # 21 is the current LTS and guards against future breakage.
+        java: [ '17', '21' ]
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
-      - name: Set up JDK 17
+
+      - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: ${{ matrix.java }}
           cache: 'maven'
 
-      - name: Build with Maven
-        run: mvn clean verify -Prun-its
+      - name: Build with Maven (unit + integration tests)
+        run: mvn -B -ntp clean verify -Prun-its
 
       - name: Upload Test Results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: test-results-java-${{ matrix.java }}
           path: |
             target/surefire-reports/
             target/invoker-reports/
@@ -38,6 +53,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-reports
+          name: coverage-reports-java-${{ matrix.java }}
           path: target/site/jacoco/
           retention-days: 30

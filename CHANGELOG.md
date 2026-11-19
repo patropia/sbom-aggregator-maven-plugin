@@ -23,6 +23,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Build now requires Maven >= 3.6.3 and Java >= 17 (enforced by
   `maven-enforcer-plugin`); the compiler uses `maven.compiler.release=17`,
   so builds on older toolchains fail fast instead of half-working.
+- The obsolete `org.eclipse.aether:aether-api:1.1.0` dependency was replaced by
+  `org.apache.maven.resolver:maven-resolver-api` 1.9.27 (`provided` scope). The
+  `org.eclipse.aether.*` package names are unchanged, so no plugin configuration
+  or user-facing behaviour is affected. The 2.x resolver line is intentionally not
+  used because it targets Maven 4.
+- Build plugin bumps: `maven-plugin-plugin` and `maven-plugin-annotations` 3.15.2,
+  `maven-invoker-plugin` 3.9.1, `central-publishing-maven-plugin` 0.8.0.
+- CI now builds and runs the integration tests on Java 17 and Java 21. CodeQL
+  code scanning (weekly plus on every push/PR) and Dependabot updates for Maven
+  dependencies and GitHub Actions were added.
+- SCM metadata moved to `scm:git:https://…` for the connection and a valid
+  `scm:git:ssh://git@github.com/…` developer connection, and `<issueManagement>`
+  was added so IDEs and the Central Portal can link to the issue tracker.
+- Added `SECURITY.md` (private vulnerability reporting through GitHub security
+  advisories) and `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1).
+- Release workflow hardening: `softprops/action-gh-release@v2`, a `concurrency`
+  group that never cancels an in-flight release, Maven batch mode (`-B -ntp`),
+  `permissions: contents: write` only, the tag version passed to `versions:set`
+  through an environment variable instead of being interpolated into the shell
+  command, and exactly one build/deploy/release sequence.
+- New `ReleaseHygieneTest` unit tests pin the items above (dependency scopes,
+  resolver coordinates, SCM URLs, CI matrix, CodeQL/Dependabot configuration,
+  community files and a single deploy/release step) so they cannot silently
+  regress.
 
 ## [1.0.0] - 2026-10-14
 

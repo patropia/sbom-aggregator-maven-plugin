@@ -1,0 +1,38 @@
+version: 2
+updates:
+  # Maven dependencies and build plugins (pom.xml).
+  - package-ecosystem: 'maven'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      time: '05:00'
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      maven-plugins:
+        patterns:
+          - 'org.apache.maven.plugins:*'
+          - 'org.apache.maven.plugin-tools:*'
+          - 'org.apache.maven.resolver:*'
+          - 'org.sonatype.central:*'
+      test-dependencies:
+        patterns:
+          - 'org.junit*:*'
+          - 'org.jacoco:*'
+
+  # GitHub Actions used by the workflows in .github/workflows.
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      time: '05:00'
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: 'chore(ci)'
+    groups:
+      github-actions:
+        patterns:
+          - '*'
