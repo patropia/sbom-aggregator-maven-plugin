@@ -44,7 +44,7 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
                 <projectSbom>${project.build.directory}/bom.json</projectSbom>
                 <!-- Target spec version for the merged output -->
                 <specVersion>1.5</specVersion>
-                <!-- Whether to fail the build if a direct dependency lacks an SBOM -->
+                <!-- Whether to fail the build if a collected dependency (direct, plus transitive when includeTransitive=true) lacks an SBOM -->
                 <failOnMissingSbom>false</failOnMissingSbom>
             </configuration>
         </execution>
@@ -56,16 +56,22 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
 
 ## Configuration Parameters
 
-| Parameter | Type | Default Value | Description |
-| :--- | :--- | :--- | :--- |
-| `projectSbom` | `File` | `${project.build.directory}/bom.json` | Path to the base project's CycloneDX SBOM. |
-| `outputDirectory` | `File` | `${project.build.directory}` | Directory where the aggregated SBOM will be written. |
-| `dependencyClassifiers` | `List<String>` | `["cyclonedx"]` | List of artifact classifiers to try when resolving dependent SBOMs. |
-| `dependencyExtensions` | `List<String>` | `["json", "xml"]` | List of file extensions to try when resolving dependent SBOMs. |
-| `outputClassifier` | `String` | `cyclonedx` | Classifier for the output aggregated SBOM artifact. |
-| `outputExtension` | `String` | `json` | File format/extension for the output aggregated SBOM (`json` or `xml`). |
-| `specVersion` | `String` | `1.5` | Target CycloneDX specification version (`1.3`, `1.4`, `1.5`, `1.6`, `1.7`). |
-| `failOnMissingSbom` | `boolean` | `false` | Fails the build if any direct dependency fails to provide an attached SBOM. |
+| Parameter | User property | Type | Default Value | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `projectSbom` | `sbomAggregator.projectSbom` | `File` | `${project.build.directory}/bom.json` | Path to the base project's CycloneDX SBOM. |
+| `outputDirectory` | `sbomAggregator.outputDirectory` | `File` | `${project.build.directory}` | Directory where the aggregated SBOM will be written. |
+| `dependencyClassifiers` | `sbomAggregator.dependencyClassifiers` | `List<String>` | `["cyclonedx"]` | List of artifact classifiers to try when resolving dependent SBOMs. |
+| `dependencyExtensions` | `sbomAggregator.dependencyExtensions` | `List<String>` | `["json", "xml"]` | List of file extensions to try when resolving dependent SBOMs. |
+| `includeTransitive` | `sbomAggregator.includeTransitive` | `boolean` | `false` | Whether to include transitive dependencies when collecting SBOMs. |
+| `includeScopes` | `sbomAggregator.includeScopes` | `List<String>` | `compile,runtime` | Comma-separated list of scopes to include when resolving transitive dependencies. |
+| `excludes` | `sbomAggregator.excludes` | `List<String>` | (empty) | List of dependency coordinates to exclude, pattern `groupId:artifactId` with `*` wildcard. |
+| `outputClassifier` | `sbomAggregator.outputClassifier` | `String` | `cyclonedx` | Classifier for the output aggregated SBOM artifact. |
+| `outputExtension` | `sbomAggregator.outputExtension` | `String` | `json` | File format/extension for the output aggregated SBOM (`json` or `xml`). |
+| `outputName` | `sbomAggregator.outputName` | `String` | `aggregated-bom` | Base filename for the aggregated SBOM output (without extension). |
+| `attach` | `sbomAggregator.attach` | `boolean` | `true` | Whether to attach the aggregated SBOM as a project artifact. |
+| `skip` | `sbomAggregator.skip` | `boolean` | `false` | Skip execution of the plugin. |
+| `specVersion` | `sbomAggregator.specVersion` | `String` | `1.5` | Target CycloneDX specification version (`1.3`, `1.4`, `1.5`, `1.6`, `1.7`). |
+| `failOnMissingSbom` | `sbomAggregator.failOnMissingSbom` | `boolean` | `false` | Fails the build if any collected dependency (direct, plus transitive when `includeTransitive=true`) fails to provide an attached SBOM. |
 
 ---
 
@@ -246,7 +252,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Roadmap
 
-- [ ] Support for transitive dependency SBOM resolution
+- [x] Support for transitive dependency SBOM resolution
 - [ ] Enhanced vulnerability correlation across aggregated components
 - [ ] SBOM diff reporting between versions
 - [ ] Support for SPDX format in addition to CycloneDX

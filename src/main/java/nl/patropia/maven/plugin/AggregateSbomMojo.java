@@ -16,7 +16,6 @@
 
 package nl.patropia.maven.plugin;
 
-import org.apache.maven.execution.MavenSession;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
@@ -72,19 +71,16 @@ public class AggregateSbomMojo extends AbstractMojo {
     @Parameter(defaultValue = "${project}", readonly = true, required = true)
     private MavenProject project;
 
-    @Parameter(defaultValue = "${session}", readonly = true, required = true)
-    private MavenSession session;
-
     /**
      * Path to the current project's base SBOM created in an earlier build phase.
      */
-    @Parameter(property = "projectSbom", defaultValue = "${project.build.directory}/bom.json", required = true)
+    @Parameter(property = "sbomAggregator.projectSbom", defaultValue = "${project.build.directory}/bom.json", required = true)
     private File projectSbom;
 
     /**
      * Output directory for the aggregated SBOM.
      */
-    @Parameter(property = "outputDirectory", defaultValue = "${project.build.directory}", required = true)
+    @Parameter(property = "sbomAggregator.outputDirectory", defaultValue = "${project.build.directory}", required = true)
     private File outputDirectory;
 
     /**
@@ -92,7 +88,7 @@ public class AggregateSbomMojo extends AbstractMojo {
      * The plugin will attempt each classifier in order until a match is found.
      * Default: ["cyclonedx"]
      */
-    @Parameter(property = "dependencyClassifiers")
+    @Parameter(property = "sbomAggregator.dependencyClassifiers")
     private List<String> dependencyClassifiers;
 
     /**
@@ -100,7 +96,7 @@ public class AggregateSbomMojo extends AbstractMojo {
      * The plugin will attempt each extension in order until a match is found.
      * Default: ["json", "xml"]
      */
-    @Parameter(property = "dependencyExtensions")
+    @Parameter(property = "sbomAggregator.dependencyExtensions")
     private List<String> dependencyExtensions;
 
     /**
@@ -132,19 +128,23 @@ public class AggregateSbomMojo extends AbstractMojo {
      * File extension/format for the output aggregated SBOM ("json" or "xml", case-insensitive).
      * Default: "json"
      */
-    @Parameter(property = "outputExtension", defaultValue = "json")
+    @Parameter(property = "sbomAggregator.outputExtension", defaultValue = "json")
     private String outputExtension;
 
     /**
      * Spec version to target (e.g., "1.3", "1.4", "1.5", "1.6", "1.7").
      */
-    @Parameter(property = "specVersion", defaultValue = "1.5")
+    @Parameter(property = "sbomAggregator.specVersion", defaultValue = "1.5")
     private String specVersion;
 
     /**
-     * Whether to fail the build if a direct dependency lacks an attached SBOM.
+     * Whether to fail the build if a collected dependency lacks an attached SBOM.
+     * <p>
+     * Applies to every dependency the plugin inspects: direct dependencies by default, and also
+     * transitive dependencies when {@code includeTransitive} is enabled.
+     * </p>
      */
-    @Parameter(property = "failOnMissingSbom", defaultValue = "false")
+    @Parameter(property = "sbomAggregator.failOnMissingSbom", defaultValue = "false")
     private boolean failOnMissingSbom;
 
     @Component
