@@ -7,18 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+### Changed (BREAKING)
+- Command-line user properties are now required to use the `sbomAggregator.*` prefix. Bare `-D` property names such as `-DspecVersion=...` or `-DprojectSbom=...` are no longer honoured by the plugin.
+
+### Added
+- Integration test `transitive-test` verifying transitive SBOM resolution, scope filtering and excludes.
+- Integration test `transitive-disabled-test` verifying the default `includeTransitive=false` behaviour.
+- New transitive-resolution options: `includeTransitive`, `includeScopes`, and `excludes`.
+- Configuration parameters: `attach`, `skip`, and `outputName`.
+
+### Other changes
 - Publishing moved from OSSRH/Nexus staging to the Sonatype Central Portal
   (`central-publishing-maven-plugin`); release secrets are now
   `CENTRAL_TOKEN_USERNAME`/`CENTRAL_TOKEN_PASSWORD`.
 - Build now requires Maven >= 3.6.3 and Java >= 17 (enforced by
   `maven-enforcer-plugin`); the compiler uses `maven.compiler.release=17`,
   so builds on older toolchains fail fast instead of half-working.
-
-### Added
-- JaCoCo coverage report (`target/site/jacoco`), wired into `verify`.
-- Apache-2.0 license headers on all Java sources.
-- `Implementation-*` entries in the jar manifest.
 
 ## [1.0.0] - 2026-10-14
 
