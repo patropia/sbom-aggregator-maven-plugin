@@ -4,10 +4,12 @@ This guide explains how to deploy the SBOM Aggregator Maven Plugin to Maven Cent
 
 ## Prerequisites
 
-1. **Sonatype OSSRH Account**
-   - Create an account at https://issues.sonatype.org/
-   - Create a JIRA ticket to claim the `nl.patropia` groupId
-   - Wait for approval (usually 1-2 business days)
+1. **Sonatype Central Portal Account**
+   - Create an account at https://central.sonatype.com/
+   - Verify ownership of the `nl.patropia` namespace
+     (see https://central.sonatype.org/publish/publish-portal-maven/)
+   - Generate a user token (Account → Generate User Token); the generated
+     username/password pair is used as the Maven server credentials
 
 2. **GPG Key for Signing**
    ```bash
@@ -28,8 +30,8 @@ This guide explains how to deploy the SBOM Aggregator Maven Plugin to Maven Cent
    
    Configure the following secrets in your GitHub repository (Settings → Secrets and variables → Actions):
    
-   - `OSSRH_USERNAME`: Your Sonatype JIRA username
-   - `OSSRH_TOKEN`: Your Sonatype JIRA password or token
+   - `CENTRAL_TOKEN_USERNAME`: Central Portal user token username
+   - `CENTRAL_TOKEN_PASSWORD`: Central Portal user token password
    - `GPG_PRIVATE_KEY`: Base64-encoded GPG private key
    - `GPG_PASSPHRASE`: Passphrase for your GPG key
 
@@ -88,15 +90,15 @@ Create or update `~/.m2/settings.xml`:
 <settings>
   <servers>
     <server>
-      <id>ossrh</id>
-      <username>YOUR_SONATYPE_USERNAME</username>
-      <password>YOUR_SONATYPE_PASSWORD</password>
+      <id>central</id>
+      <username>YOUR_CENTRAL_TOKEN_USERNAME</username>
+      <password>YOUR_CENTRAL_TOKEN_PASSWORD</password>
     </server>
   </servers>
   
   <profiles>
     <profile>
-      <id>ossrh</id>
+      <id>central</id>
       <activation>
         <activeByDefault>true</activeByDefault>
       </activation>
@@ -118,8 +120,9 @@ mvn versions:set -DnewVersion=1.0.0
 # Deploy to Maven Central
 mvn clean deploy -P release
 
-# If auto-release is disabled, manually release via Nexus UI:
-# https://s01.oss.sonatype.org/
+# The central-publishing-maven-plugin uploads the bundle to the Central Portal;
+# with autoPublish=true it is released automatically. Track the deployment at
+# https://central.sonatype.com/publishing/deployments
 ```
 
 ### 3. Create GitHub Release
@@ -167,8 +170,8 @@ echo "test" | gpg --clearsign
 
 ### Deployment Hangs
 
-- Check Nexus staging repository status: https://s01.oss.sonatype.org/
-- Look for validation errors in the staging repository
+- Check the deployment status at https://central.sonatype.com/publishing/deployments
+- Look for validation errors reported for the deployment
 - Ensure all required metadata is present (POM, sources, javadoc)
 
 ### Maven Central Sync Delay
@@ -179,6 +182,6 @@ echo "test" | gpg --clearsign
 
 ## Resources
 
-- [Sonatype OSSRH Guide](https://central.sonatype.org/publish/publish-guide/)
+- [Publishing to the Central Portal with Maven](https://central.sonatype.org/publish/publish-portal-maven/)
+- [Central Portal deployments](https://central.sonatype.com/publishing/deployments)
 - [Maven GPG Plugin](https://maven.apache.org/plugins/maven-gpg-plugin/)
-- [Nexus Staging Plugin](https://github.com/sonatype/nexus-maven-plugins/tree/main/staging/maven-plugin)
