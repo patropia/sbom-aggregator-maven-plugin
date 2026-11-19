@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>nl.patropia.it</groupId>
+    <artifactId>transitive-dependency-test</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>Transitive Dependency Integration Test</name>
+    <description>Tests that sbomAggregator.includeTransitive picks up transitive dependencies and that
+        sbomAggregator.excludes removes them again.</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+    </properties>
+
+    <dependencies>
+        <!-- commons-text brings commons-lang3 in transitively; neither ships an attached SBOM,
+             so both are reported as fallback components. -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-text</artifactId>
+            <version>1.10.0</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>nl.patropia.maven.plugin</groupId>
+                <artifactId>sbom-aggregator-maven-plugin</artifactId>
+                <version>@project.version@</version>
+                <executions>
+                    <!-- 1. Direct dependencies only: commons-lang3 must NOT show up -->
+                    <execution>
+                        <id>direct-only</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>aggregate-sboms</goal>
+                        </goals>
+                        <configuration>
+                            <projectSbom>${project.basedir}/src/sbom/base-bom.json</projectSbom>
+                            <failOnMissingSbom>false</failOnMissingSbom>
+                            <includeTransitive>false</includeTransitive>
+                            <outputName>transitive-direct</outputName>
+                            <attach>false</attach>
+                        </configuration>
+                    </execution>
+                    <!-- 2. Including transitive dependencies: both must show up -->
+                    <execution>
+                        <id>with-transitive</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>aggregate-sboms</goal>
+                        </goals>
+                        <configuration>
+                            <projectSbom>${project.basedir}/src/sbom/base-bom.json</projectSbom>
+                            <failOnMissingSbom>false</failOnMissingSbom>
+                            <includeTransitive>true</includeTransitive>
+                            <outputName>transitive-all</outputName>
+                            <outputClassifier>cyclonedx-all</outputClassifier>
+                            <attach>false</attach>
+                        </configuration>
+                    </execution>
+                    <!-- 3. Excluding the same transitive dependency again -->
+                    <execution>
+                        <id>with-excludes</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>aggregate-sboms</goal>
+                        </goals>
+                        <configuration>
+                            <projectSbom>${project.basedir}/src/sbom/base-bom.json</projectSbom>
+                            <failOnMissingSbom>false</failOnMissingSbom>
+                            <includeTransitive>true</includeTransitive>
+                            <excludes>
+                                <exclude>org.apache.commons:commons-lang3</exclude>
+                            </excludes>
+                            <outputName>transitive-excluded</outputName>
+                            <outputClassifier>cyclonedx-excluded</outputClassifier>
+                            <attach>false</attach>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -462,6 +462,23 @@ public class AggregateSbomMojo extends AbstractMojo {
         } else {
             outputClassifier = outputClassifier.trim();
         }
+
+        // Warn if includeTransitive is requested but the plugin only asks Maven for compile+runtime
+        // resolution. Users who request test/provided/system scopes may find no transitive artifacts.
+        if (includeTransitive && includeScopes != null) {
+            for (String scope : includeScopes) {
+                if (scope != null) {
+                    String s = scope.trim().toLowerCase(Locale.ROOT);
+                    if (s.equals("test") || s.equals("provided") || s.equals("system")) {
+                        getLog().warn("sbomAggregator.includeTransitive=true with sbomAggregator.includeScopes containing '"
+                                + s + "', but this goal only requests COMPILE_PLUS_RUNTIME dependency resolution. "
+                                + "Dependencies of scope '" + s + "' are usually not part of that resolution and will "
+                                + "be skipped; only compile and runtime transitive dependencies are aggregated.");
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     /**
