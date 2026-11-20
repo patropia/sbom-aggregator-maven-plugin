@@ -261,6 +261,94 @@ class AggregateSbomMojoAttachTest {
         assertEquals("cyclonedx", field(mojo, "outputClassifier"));
     }
 
+    @Test
+    void rejectsMalformedMaxSbomSize(@TempDir Path tempDir) throws Exception {
+        AggregateSbomMojo mojo = newMojo(tempDir, new RecordingProjectHelper());
+        mojo.setMaxSbomSize("10XB");
+        MojoExecutionException error = assertThrows(MojoExecutionException.class, mojo::execute);
+        assertTrue(error.getMessage().contains("maxSbomSize"), error.getMessage());
+    }
+
+    @Test
+    void invalidProjectSbomAlwaysFailsWithoutLeakingContent(@TempDir Path tempDir) throws Exception {
+        Path bad = tempDir.resolve("bad-bom.json");
+        Files.writeString(bad, "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",[SECRET-TOKEN-123");
+        AggregateSbomMojo mojo = newMojo(tempDir, new RecordingProjectHelper());
+        mojo.setProjectSbom(bad.toFile());
+        mojo.setFailOnInvalidSbom(false);
+        MojoExecutionException error = assertThrows(MojoExecutionException.class, mojo::execute);
+        assertFalse(error.getMessage().contains("SECRET-TOKEN-123"), error.getMessage());
+    }
+
+    // ------------------------------------------------------------------ invalid dependency SBOM
+
+    private static final String SECRET = "SECRET-TOKEN-123";
+
+    /** Mojo whose project has one compile dependency com.x:dep:2.0 that resolves to a corrupt SBOM. */
+    private static AggregateSbomMojo mojoWithCorruptDependencySbom(Path dir) throws Exception {
+        Path corrupt = dir.resolve("dep.json");
+        Files.writeString(corrupt, "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",[" + SECRET);
+        AggregateSbomMojo mojo = newMojo(dir, new RecordingProjectHelper());
+        org.apache.maven.model.Dependency dependency = new org.apache.maven.model.Dependency();
+        dependency.setGroupId("com.x");
+        dependency.setArtifactId("dep");
+        dependency.setVersion("2.0");
+        dependency.setScope("compile");
+        projectOf(mojo).getModel().addDependency(dependency);
+
+        org.eclipse.aether.RepositorySystem repo = (org.eclipse.aether.RepositorySystem) java.lang.reflect.Proxy
+                .newProxyInstance(AggregateSbomMojoAttachTest.class.getClassLoader(),
+                        new Class<?>[] {org.eclipse.aether.RepositorySystem.class}, (proxy, method, args) -> {
+                            if (!"resolveArtifact".equals(method.getName())) {
+                                throw new UnsupportedOperationException(method.getName());
+                            }
+                            org.eclipse.aether.resolution.ArtifactRequest request =
+                                    (org.eclipse.aether.resolution.ArtifactRequest) args[1];
+                            org.eclipse.aether.resolution.ArtifactResult result =
+                                    new org.eclipse.aether.resolution.ArtifactResult(request);
+                            org.eclipse.aether.artifact.Artifact artifact = request.getArtifact();
+                            if ("json".equals(artifact.getExtension())) {
+                                artifact = artifact.setFile(corrupt.toFile());
+                            }
+                            result.setArtifact(artifact);
+                            return result;
+                        });
+        set(mojo, "repoSystem", repo);
+        return mojo;
+    }
+
+    @Test
+    void invalidDependencySbomFailsWhenFlagIsTrue(@TempDir Path tempDir) throws Exception {
+        AggregateSbomMojo mojo = mojoWithCorruptDependencySbom(tempDir);
+        mojo.setFailOnInvalidSbom(true);
+        MojoExecutionException error = assertThrows(MojoExecutionException.class, mojo::execute);
+        assertTrue(error.getMessage().contains("dep.json"), error.getMessage());
+        for (Throwable t = error; t != null; t = t.getCause()) {
+            assertFalse(String.valueOf(t.getMessage()).contains(SECRET), "leaked content: " + t.getMessage());
+        }
+        assertFalse(Files.exists(tempDir.resolve("aggregated-bom.json")));
+    }
+
+    @Test
+    void invalidDependencySbomBecomesPlaceholderWhenFlagIsFalse(@TempDir Path tempDir) throws Exception {
+        AggregateSbomMojo mojo = mojoWithCorruptDependencySbom(tempDir);
+        mojo.setFailOnInvalidSbom(false);
+        mojo.execute();
+        String output = Files.readString(tempDir.resolve("aggregated-bom.json"));
+        assertTrue(output.contains(SbomMerger.PROPERTY_MISSING_SBOM), output);
+        assertTrue(output.contains("pkg:maven/com.x/dep@2.0"), output);
+        assertFalse(output.contains(SECRET));
+    }
+
+    @Test
+    void oversizedDependencySbomIsRejected(@TempDir Path tempDir) throws Exception {
+        AggregateSbomMojo mojo = mojoWithCorruptDependencySbom(tempDir);
+        Files.writeString(tempDir.resolve("dep.json"), "x".repeat(3000));
+        mojo.setMaxSbomSize("1KB");
+        MojoExecutionException error = assertThrows(MojoExecutionException.class, mojo::execute);
+        assertTrue(error.getMessage().contains("exceeds maxSbomSize"), error.getMessage());
+    }
+
     // --------------------------------------------------------------- helpers
 
     private static Object field(Object target, String name) throws Exception {

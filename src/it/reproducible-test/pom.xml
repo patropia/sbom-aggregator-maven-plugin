@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>nl.patropia.maven.it</groupId>
+    <artifactId>reproducible-test</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>Reproducible Build Integration Test</name>
+    <description>Two aggregations with a fixed outputTimestamp must produce identical serial numbers and timestamps</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <test.outputTimestamp>2024-01-01T00:00:00Z</test.outputTimestamp>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>nl.patropia.maven.plugin</groupId>
+                <artifactId>sbom-aggregator-maven-plugin</artifactId>
+                <version>@project.version@</version>
+                <executions>
+                    <execution>
+                        <id>aggregate-a</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>aggregate-sboms</goal>
+                        </goals>
+                        <configuration>
+                            <projectSbom>${project.basedir}/src/sbom/base-bom.json</projectSbom>
+                            <outputTimestamp>${test.outputTimestamp}</outputTimestamp>
+                            <outputName>reproducible-a</outputName>
+                            <failOnMissingSbom>false</failOnMissingSbom>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>aggregate-b</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>aggregate-sboms</goal>
+                        </goals>
+                        <configuration>
+                            <projectSbom>${project.basedir}/src/sbom/base-bom.json</projectSbom>
+                            <outputTimestamp>${test.outputTimestamp}</outputTimestamp>
+                            <outputName>reproducible-b</outputName>
+                            <failOnMissingSbom>false</failOnMissingSbom>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

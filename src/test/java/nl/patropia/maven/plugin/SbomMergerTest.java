@@ -18,7 +18,10 @@ package nl.patropia.maven.plugin;
 
 import org.cyclonedx.model.Bom;
 import org.cyclonedx.model.Component;
+import org.cyclonedx.model.Composition;
 import org.cyclonedx.model.Dependency;
+import org.cyclonedx.model.Property;
+import org.cyclonedx.model.Service;
 import org.cyclonedx.parsers.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -26,6 +29,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -64,7 +68,12 @@ class SbomMergerTest {
     }
 
     private static Bom merge(List<Bom> boms, List<SbomMerger.MissingDependency> missing) {
-        return SbomMerger.merge(ROOT_GROUP, ROOT_ARTIFACT, ROOT_VERSION, boms, missing);
+        return SbomMerger.merge(ROOT_GROUP, ROOT_ARTIFACT, ROOT_VERSION, "1.5", boms, missing, null);
+    }
+
+    private static Bom merge(List<Bom> boms, List<SbomMerger.MissingDependency> missing,
+                             String specVersion, Instant timestamp) {
+        return SbomMerger.merge(ROOT_GROUP, ROOT_ARTIFACT, ROOT_VERSION, specVersion, boms, missing, timestamp);
     }
 
     private static Component componentByName(Bom bom, String name) {
@@ -548,10 +557,205 @@ class SbomMergerTest {
     @Test
     void rejectsNullMavenCoordinates() {
         assertThrows(NullPointerException.class,
-                () -> SbomMerger.merge(null, "root", "1.0.0", null, null));
+                () -> SbomMerger.merge(null, "root", "1.0.0", "1.5", null, null, null));
         assertThrows(NullPointerException.class,
-                () -> SbomMerger.merge("com.acme", null, "1.0.0", null, null));
+                () -> SbomMerger.merge("com.acme", null, "1.0.0", "1.5", null, null, null));
         assertThrows(NullPointerException.class,
-                () -> SbomMerger.merge("com.acme", "root", null, null, null));
+                () -> SbomMerger.merge("com.acme", "root", null, "1.5", null, null, null));
+    }
+
+    // ------------------------------------------------------------------ M2: services, compositions, determinism
+
+    private static final String MISSING_PURL = "pkg:maven/com.x/dep@2.0";
+
+    private static List<SbomMerger.MissingDependency> oneMissing() {
+        return new ArrayList<>(Collections.singletonList(new SbomMerger.MissingDependency("com.x", "dep", "2.0")));
+    }
+
+    @Test
+    void deduplicatesServicesRenamesClashingRefsAndHoistsNestedServices(@TempDir Path dir) throws Exception {
+        Bom a = parseBom(dir, "a.json", "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"version\":1,"
+                + "\"metadata\":{\"component\":{\"type\":\"library\",\"bom-ref\":\"lib-a\",\"group\":\"com.a\","
+                + "\"name\":\"lib-a\",\"version\":\"1\"}},"
+                + "\"components\":[{\"type\":\"library\",\"bom-ref\":\"clash\",\"group\":\"com.a\",\"name\":\"util\","
+                + "\"version\":\"1\"}],"
+                + "\"services\":[{\"bom-ref\":\"svc\",\"group\":\"com.x\",\"name\":\"api\",\"version\":\"1\","
+                + "\"services\":[{\"bom-ref\":\"inner\",\"name\":\"inner\",\"version\":\"1\"}]}]}");
+        Bom b = parseBom(dir, "b.json", "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"version\":1,"
+                + "\"metadata\":{\"component\":{\"type\":\"library\",\"bom-ref\":\"lib-b\",\"group\":\"com.b\","
+                + "\"name\":\"lib-b\",\"version\":\"1\"}},"
+                + "\"services\":[{\"bom-ref\":\"svc-b\",\"group\":\"com.x\",\"name\":\"api\",\"version\":\"1\","
+                + "\"description\":\"from b\"},"
+                + "{\"bom-ref\":\"clash\",\"name\":\"other\",\"version\":\"2\"}]}");
+
+        Bom merged = merge(Arrays.asList(a, b), null);
+
+        List<Service> services = merged.getServices();
+        assertNotNull(services);
+        assertEquals(1, services.stream().filter(s -> "api".equals(s.getName())).count(),
+                "the same group:name:version service must be merged into one");
+        Service api = services.stream().filter(s -> "api".equals(s.getName())).findFirst().orElseThrow();
+        assertEquals("svc", api.getBomRef());
+        assertEquals("from b", api.getDescription(), "missing description is filled from the duplicate");
+
+        Service inner = services.stream().filter(s -> "inner".equals(s.getName())).findFirst().orElse(null);
+        assertNotNull(inner, "nested services must be hoisted to the top level");
+        assertTrue(api.getServices() == null || api.getServices().isEmpty(), "nested list must be cleared");
+
+        Service other = services.stream().filter(s -> "other".equals(s.getName())).findFirst().orElseThrow();
+        assertNotEquals("clash", other.getBomRef(), "a service ref used by a component must be renamed");
+        assertEquals("other@2", other.getBomRef());
+
+        Set<String> allRefs = new HashSet<>();
+        for (Component component : merged.getComponents()) {
+            assertTrue(allRefs.add(component.getBomRef()), "duplicate bom-ref " + component.getBomRef());
+        }
+        for (Service service : services) {
+            assertTrue(allRefs.add(service.getBomRef()), "duplicate bom-ref " + service.getBomRef());
+        }
+    }
+
+    @Test
+    void noCompositionsBeforeSpec14() {
+        assertNull(merge(null, oneMissing(), "1.3", null).getCompositions());
+    }
+
+    @Test
+    void noCompositionsWithoutPlaceholders() {
+        assertNull(merge(null, null, "1.5", null).getCompositions());
+    }
+
+    @Test
+    void compositionsDescribeIncompleteInventoryFromSpec14() {
+        for (String spec : Arrays.asList("1.4", "1.5")) {
+            List<Composition> compositions = merge(null, oneMissing(), spec, null).getCompositions();
+            assertNotNull(compositions, "compositions expected for " + spec);
+            assertEquals(2, compositions.size());
+            Composition unknown = compositions.stream()
+                    .filter(c -> c.getAggregate() == Composition.Aggregate.UNKNOWN).findFirst().orElseThrow();
+            assertEquals(Collections.singletonList(MISSING_PURL),
+                    unknown.getDependencies().stream().map(r -> r.getRef()).collect(Collectors.toList()));
+            Composition incomplete = compositions.stream()
+                    .filter(c -> c.getAggregate() == Composition.Aggregate.INCOMPLETE).findFirst().orElseThrow();
+            assertEquals(Collections.singletonList(ROOT_PURL),
+                    incomplete.getAssemblies().stream().map(r -> r.getRef()).collect(Collectors.toList()));
+        }
+    }
+
+    @Test
+    void fixedTimestampGivesDeterministicSerialAndTruncatedTimestamp() {
+        Instant ts = Instant.parse("2024-01-01T10:00:00.789Z");
+        Bom first = merge(null, oneMissing(), "1.5", ts);
+        Bom second = merge(null, oneMissing(), "1.5", ts);
+
+        assertNotNull(first.getSerialNumber());
+        assertTrue(first.getSerialNumber().startsWith("urn:uuid:"));
+        assertEquals(first.getSerialNumber(), second.getSerialNumber());
+        assertEquals(Instant.parse("2024-01-01T10:00:00Z"), first.getMetadata().getTimestamp().toInstant());
+        assertEquals(first.getMetadata().getTimestamp(), second.getMetadata().getTimestamp());
+        assertEquals(first.getComponents().stream().map(Component::getBomRef).collect(Collectors.toList()),
+                second.getComponents().stream().map(Component::getBomRef).collect(Collectors.toList()));
+    }
+
+    @Test
+    void serialChangesWithDependencySetOrTimestamp() {
+        Instant ts = Instant.parse("2024-01-01T10:00:00Z");
+        String base = merge(null, oneMissing(), "1.5", ts).getSerialNumber();
+        List<SbomMerger.MissingDependency> two = oneMissing();
+        two.add(new SbomMerger.MissingDependency("com.y", "other", "1.0"));
+        assertNotEquals(base, merge(null, two, "1.5", ts).getSerialNumber());
+        assertNotEquals(base, merge(null, oneMissing(), "1.5", ts.plusSeconds(1)).getSerialNumber());
+    }
+
+    @Test
+    void withoutTimestampSerialIsRandom() {
+        String first = merge(null, null, "1.5", null).getSerialNumber();
+        String second = merge(null, null, "1.5", null).getSerialNumber();
+        assertTrue(first.startsWith("urn:uuid:"));
+        assertNotEquals(first, second);
+    }
+
+    private static Bom projectBom(String supplier, String manufacturer, String licenseId) {
+        Component root = new Component();
+        root.setType(Component.Type.LIBRARY);
+        root.setGroup(ROOT_GROUP);
+        root.setName(ROOT_ARTIFACT);
+        root.setVersion(ROOT_VERSION);
+        root.setPurl(ROOT_PURL);
+        root.setBomRef(ROOT_PURL);
+        org.cyclonedx.model.Metadata metadata = new org.cyclonedx.model.Metadata();
+        metadata.setComponent(root);
+        if (supplier != null) {
+            org.cyclonedx.model.OrganizationalEntity entity = new org.cyclonedx.model.OrganizationalEntity();
+            entity.setName(supplier);
+            metadata.setSupplier(entity);
+        }
+        if (manufacturer != null) {
+            org.cyclonedx.model.OrganizationalEntity entity = new org.cyclonedx.model.OrganizationalEntity();
+            entity.setName(manufacturer);
+            metadata.setManufacturer(entity);
+        }
+        if (licenseId != null) {
+            org.cyclonedx.model.License license = new org.cyclonedx.model.License();
+            license.setId(licenseId);
+            org.cyclonedx.model.LicenseChoice choice = new org.cyclonedx.model.LicenseChoice();
+            choice.addLicense(license);
+            metadata.setLicenses(choice);
+        }
+        Bom bom = new Bom();
+        bom.setMetadata(metadata);
+        return bom;
+    }
+
+    @Test
+    void enrichesRootMetadataFromProjectBom() {
+        Bom merged = merge(new ArrayList<>(Collections.singletonList(
+                projectBom("Acme Supplier", "Acme Mfg", "Apache-2.0"))), null);
+
+        org.cyclonedx.model.Metadata metadata = merged.getMetadata();
+        assertEquals("Acme Supplier", metadata.getSupplier().getName());
+        assertEquals("Acme Mfg", metadata.getManufacturer().getName());
+        assertEquals("Apache-2.0", metadata.getLicenses().getLicenses().get(0).getId());
+        Component root = metadata.getComponent();
+        assertEquals(Component.Type.APPLICATION, root.getType());
+        assertEquals(ROOT_PURL, root.getPurl());
+        assertEquals(ROOT_PURL, root.getBomRef());
+    }
+
+    @Test
+    void enrichmentDoesNotOverwriteFirstValue() {
+        Bom merged = merge(new ArrayList<>(Arrays.asList(
+                projectBom("First", null, null),
+                projectBom("Second", "Mfg", null))), null);
+
+        assertEquals("First", merged.getMetadata().getSupplier().getName(), "first non-null value wins");
+        assertEquals("Mfg", merged.getMetadata().getManufacturer().getName(), "empty values are still filled");
+        assertNull(merged.getMetadata().getLicenses());
+    }
+
+    @Test
+    void doesNotEnrichFromUpstreamBom() {
+        Bom upstream = projectBom("Upstream", null, null);
+        Component meta = upstream.getMetadata().getComponent();
+        meta.setGroup("com.other");
+        meta.setPurl("pkg:maven/com.other/root@1.0.0");
+        meta.setBomRef("pkg:maven/com.other/root@1.0.0");
+
+        Bom merged = merge(new ArrayList<>(Collections.singletonList(upstream)), null);
+
+        assertNull(merged.getMetadata().getSupplier(), "only the project's own SBOM enriches the metadata");
+    }
+
+    @Test
+    void placeholdersCarryMissingSbomProperty() {
+        Bom merged = merge(null, oneMissing());
+
+        Component placeholder = merged.getComponents().stream()
+                .filter(c -> MISSING_PURL.equals(c.getPurl())).findFirst().orElseThrow();
+        List<Property> properties = placeholder.getProperties();
+        assertNotNull(properties);
+        assertTrue(properties.stream().anyMatch(p -> SbomMerger.PROPERTY_MISSING_SBOM.equals(p.getName())
+                        && "true".equals(p.getValue())),
+                "placeholder must carry " + SbomMerger.PROPERTY_MISSING_SBOM + "=true");
     }
 }
