@@ -72,6 +72,10 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
 | `attach` | `sbomAggregator.attach` | `boolean` | `true` | Whether to attach the aggregated SBOM as a project artifact. |
 | `skip` | `sbomAggregator.skip` | `boolean` | `false` | Skip execution of the plugin. |
 | `specVersion` | `sbomAggregator.specVersion` | `String` | `1.5` | Target CycloneDX specification version (`1.3`, `1.4`, `1.5`, `1.6`, `1.7`). |
+| `outputTimestamp` | `sbomAggregator.outputTimestamp` | `String` | `${project.build.outputTimestamp}` | ISO-8601 or epoch seconds; when set the plugin will use a fixed timestamp and derive a name-based urn:uuid serialNumber for reproducible outputs. |
+| `maxSbomSize` | `sbomAggregator.maxSbomSize` | `String` | `50MB` | Maximum size of each input SBOM file, in bytes or with a `KB`/`MB`/`GB` suffix; `0` means unlimited. Each file is held in memory while it is parsed. |
+| `failOnInvalidSbom` | `sbomAggregator.failOnInvalidSbom` | `boolean` | `true` | Fails the build when a dependency SBOM is not a valid CycloneDX JSON/XML document or exceeds `maxSbomSize`. When `false`, the dependency is reported as missing and a placeholder component is emitted. An invalid project SBOM always fails the build. |
+| `validateOutput` | `sbomAggregator.validateOutput` | `boolean` | `true` | Validates the generated SBOM against the bundled CycloneDX JSON/XML schema for `specVersion` before writing it; on failure the build fails and no file is written. Validation is offline. The error message quotes the first schema problem, which can include values from the generated SBOM; run with `-X` to log every problem. |
 | `failOnMissingSbom` | `sbomAggregator.failOnMissingSbom` | `boolean` | `false` | Fails the build if any collected dependency (direct, plus transitive when `includeTransitive=true`) fails to provide an attached SBOM. |
 
 ---

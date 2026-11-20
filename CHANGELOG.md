@@ -11,10 +11,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Command-line user properties are now required to use the `sbomAggregator.*` prefix. Bare `-D` property names such as `-DspecVersion=...` or `-DprojectSbom=...` are no longer honoured by the plugin.
 
 ### Added
+- New transitive-resolution options: `includeTransitive`, `includeScopes`, and `excludes`.
+- Configuration parameters: `attach`, `skip`, `outputName`, and `outputTimestamp`.
+- **Reproducible builds:** `outputTimestamp` accepts an ISO-8601 instant or epoch seconds (typically
+  `${project.build.outputTimestamp}`). When it is set, the aggregated SBOM uses that fixed `metadata.timestamp` and a
+  name-based `urn:uuid` `serialNumber`, so two builds of the same inputs produce byte-identical SBOMs.
+- **Input hardening:** new `maxSbomSize` (default `50MB`, accepts `KB`/`MB`/`GB`, `0` = unlimited) rejects oversized
+  input SBOMs before they are parsed, and input format is now detected from the file content instead of the file
+  extension. Parse failures report only the file and the parser exception class, never the file contents.
+- **Input validation:** new `failOnInvalidSbom` (default `true`). When `false`, a dependency SBOM that is not valid
+  CycloneDX JSON/XML or exceeds `maxSbomSize` is reported as missing and gets a placeholder component instead of
+  failing the build. An invalid project SBOM always fails the build.
+- **Output validation:** new `validateOutput` (default `true`) validates the generated SBOM against the bundled
+  CycloneDX JSON/XML schema of the configured `specVersion` before the file is written; on failure the build fails
+  and no output file is produced. Validation is offline and can be disabled with
+  `-DsbomAggregator.validateOutput=false`. Only the first schema problem is shown in the error message (the message can
+  quote values from the generated SBOM); with `-X` every problem is logged at debug level.
+- **Aggregated document metadata:** the aggregated SBOM now carries a `urn:uuid` `serialNumber` (deterministic when
+  `outputTimestamp` is set), a `metadata.timestamp` and a `metadata.tools` entry for this plugin
+  (`tools.components` for spec 1.5+, the legacy `tools[]` array for 1.3/1.4).
+- **Merged content:** `services` from input SBOMs are merged (bom-ref/GAV de-duplication with collision-safe ref
+  renaming); `compositions` are emitted for spec >= 1.4 (`unknown` for placeholders, `incomplete` for the root);
+  the root `metadata.component` is enriched from the project's own SBOM (description, licenses, supplier, hashes,
+  external references) and metadata licenses/supplier/manufacturer are carried over. Placeholder components carry
+  the property `sbomAggregator:missingSbom=true`.
 - Integration test `transitive-test` verifying transitive SBOM resolution, scope filtering and excludes.
 - Integration test `transitive-disabled-test` verifying the default `includeTransitive=false` behaviour.
-- New transitive-resolution options: `includeTransitive`, `includeScopes`, and `excludes`.
-- Configuration parameters: `attach`, `skip`, and `outputName`.
+- Integration test `invalid-sbom-test` verifying that an invalid dependency SBOM fails the build without writing an
+  output file and without leaking the file contents into the build log.
+- Integration test `reproducible-test` verifying that two runs with the same `outputTimestamp` produce the same
+  `serialNumber`, `metadata.timestamp` and component order.
+
+### Changed
+- `failOnMissingSbom` is now evaluated after the input SBOMs are parsed, so a dependency SBOM that was downgraded to
+  missing by `failOnInvalidSbom=false` also fails the build when `failOnMissingSbom=true`.
+
+### Fixed
+- **Purls:** Maven purls are now built by a dedicated helper that percent-encodes namespace, name, version and
+  qualifier values and orders `classifier`/`type` qualifiers alphabetically, as the purl specification requires.
 
 ### Other changes
 - Publishing moved from OSSRH/Nexus staging to the Sonatype Central Portal

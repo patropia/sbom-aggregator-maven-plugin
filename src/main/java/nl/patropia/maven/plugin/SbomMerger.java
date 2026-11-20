@@ -17,11 +17,21 @@
 package nl.patropia.maven.plugin;
 
 import org.cyclonedx.model.Bom;
+import org.cyclonedx.model.BomReference;
 import org.cyclonedx.model.Component;
+import org.cyclonedx.model.Composition;
 import org.cyclonedx.model.Dependency;
 import org.cyclonedx.model.Metadata;
+import org.cyclonedx.model.Property;
+import org.cyclonedx.model.Service;
+import org.cyclonedx.model.Tool;
+import org.cyclonedx.model.metadata.ToolInformation;
 
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -30,6 +40,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
+import java.util.Locale;
+
+import org.cyclonedx.model.Hash;
+import org.cyclonedx.model.ExternalReference;
+import org.cyclonedx.model.License;
+import org.cyclonedx.model.LicenseChoice;
+import org.cyclonedx.model.OrganizationalEntity;
+import org.cyclonedx.model.Composition;
+import org.cyclonedx.model.BomReference;
 
 /**
  * Merges several CycloneDX {@link Bom}s into one aggregated BOM that describes the project
@@ -61,6 +81,12 @@ import java.util.Set;
  *       {@code pkg:maven/groupId/artifactId@version}, and is wired as a child of the root.</li>
  *   <li><b>Dangling/self references:</b> references that cannot be resolved to a known component
  *       and self-loops are dropped.</li>
+ *   <li><b>Document identity:</b> the aggregated BOM gets a fresh {@code urn:uuid} serial number, a
+ *       {@code metadata.timestamp} and a {@code metadata.tools} entry describing this plugin. From
+ *       spec 1.5 onwards the newer {@code tools.components} form is used, for 1.3 and 1.4 the
+ *       legacy {@code tools[]} array.</li>
+ *   <li><b>Placeholders:</b> every placeholder component carries the property
+ *       {@code sbomAggregator:missingSbom=true}, so readers can tell that its data is incomplete.</li>
  * </ul>
  *
  * <h2>Side effects</h2>
@@ -68,6 +94,33 @@ import java.util.Set;
  * is set to the final merged reference and their nested component list is cleared.
  */
 public final class SbomMerger {
+
+    /** GroupId of this plugin, reported in {@code metadata.tools}. */
+    public static final String PLUGIN_GROUP_ID = "nl.patropia.maven.plugin";
+
+    /** ArtifactId of this plugin, reported in {@code metadata.tools}. */
+    public static final String PLUGIN_ARTIFACT_ID = "sbom-aggregator-maven-plugin";
+
+    /**
+     * Property set on placeholder components (dependencies without an attached SBOM). Its value is
+     * always {@code true}.
+     */
+    public static final String PROPERTY_MISSING_SBOM = "sbomAggregator:missingSbom";
+
+    /** Spec minor version assumed when the requested spec version cannot be parsed. */
+    private static final int FALLBACK_SPEC_MINOR = 3;
+
+    /** First spec version that understands the {@code tools.components} form. */
+    private static final int SPEC_MINOR_TOOLS_COMPONENTS = 5;
+
+    /** First spec version that supports compositions. */
+    private static final int SPEC_MINOR_COMPOSITIONS = 4;
+
+    /** Highest supported CycloneDX 1.x minor version. */
+    private static final int MAX_SPEC_MINOR = 7;
+
+    /** Lowest supported CycloneDX 1.x minor version. */
+    private static final int MIN_SPEC_MINOR = 3;
 
     private SbomMerger() {
         // utility class
@@ -138,6 +191,9 @@ public final class SbomMerger {
      * @param rootGroupId   groupId of the project being built
      * @param rootArtifactId artifactId of the project being built
      * @param rootVersion   version of the project being built
+     * @param specVersion   targeted CycloneDX spec version, e.g. {@code 1.5}; when {@code null},
+     *                      blank or unparsable the most conservative supported version is assumed
+     *                      ({@code 1.3})
      * @param parsedBoms    upstream and project BOMs; may be {@code null}
      * @param missingDeps   dependencies without an attached SBOM; may be {@code null}
      * @return an aggregated BOM whose metadata component is the project
@@ -145,8 +201,10 @@ public final class SbomMerger {
     public static Bom merge(String rootGroupId,
                             String rootArtifactId,
                             String rootVersion,
+                            String specVersion,
                             List<Bom> parsedBoms,
-                            List<MissingDependency> missingDeps) {
+                            List<MissingDependency> missingDeps,
+                            Instant outputTimestamp) {
         Objects.requireNonNull(rootGroupId, "rootGroupId must not be null");
         Objects.requireNonNull(rootArtifactId, "rootArtifactId must not be null");
         Objects.requireNonNull(rootVersion, "rootVersion must not be null");
@@ -154,15 +212,25 @@ public final class SbomMerger {
         List<Bom> boms = parsedBoms == null ? new ArrayList<>() : parsedBoms;
         List<MissingDependency> missing = missingDeps == null ? new ArrayList<>() : missingDeps;
 
-        String rootRef = String.format("pkg:maven/%s/%s@%s", rootGroupId, rootArtifactId, rootVersion);
+        String rootRef = Purls.maven(rootGroupId, rootArtifactId, rootVersion, null, null);
         String rootGav = rootGroupId + ":" + rootArtifactId + ":" + rootVersion;
+        int specMinor = specMinor(specVersion);
 
         Bom out = new Bom();
+
         Metadata metadata = new Metadata();
-        metadata.setComponent(buildRoot(rootGroupId, rootArtifactId, rootVersion, rootRef));
+        if (outputTimestamp == null) {
+            out.setSerialNumber("urn:uuid:" + UUID.randomUUID());
+            metadata.setTimestamp(new Date());
+        } else {
+            metadata.setTimestamp(Date.from(outputTimestamp.truncatedTo(ChronoUnit.SECONDS)));
+        }
+        Component rootComponent = buildRoot(rootGroupId, rootArtifactId, rootVersion, rootRef);
+        metadata.setComponent(rootComponent);
+        addTooling(metadata, specMinor);
         out.setMetadata(metadata);
 
-        State state = new State(rootRef, rootGav);
+        State state = new State(rootRef, rootGav, rootComponent);
 
         // 1. collect and register components (project metadata component, components, nested ones)
         List<Map<String, String>> localMaps = new ArrayList<>();
@@ -184,6 +252,15 @@ public final class SbomMerger {
                 }
                 for (Component component : flat) {
                     state.register(component, localMap);
+                }
+            }
+            if (bom.getServices() != null) {
+                List<Service> flatServices = new ArrayList<>();
+                for (Service service : bom.getServices()) {
+                    flatServices.addAll(flattenService(service));
+                }
+                for (Service service : flatServices) {
+                    state.registerService(service, localMap);
                 }
             }
         }
@@ -238,6 +315,7 @@ public final class SbomMerger {
             if (metaRef.equals(rootRef)) {
                 sawOwnBom = true;
                 ownBomChildren.addAll(graph.getOrDefault(rootRef, new LinkedHashSet<>()));
+                enrichMetadata(out.getMetadata(), bom.getMetadata());
             } else {
                 upstreamRoots.add(metaRef);
             }
@@ -261,6 +339,7 @@ public final class SbomMerger {
         List<String> orderedRefs = new ArrayList<>();
         orderedRefs.add(rootRef);
         orderedRefs.addAll(state.merged.keySet());
+        orderedRefs.addAll(state.services.keySet());
         for (String ref : orderedRefs) {
             Dependency dependency = new Dependency(ref);
             Set<String> children = graph.get(ref);
@@ -276,7 +355,88 @@ public final class SbomMerger {
 
         out.setComponents(new ArrayList<>(state.merged.values()));
         out.setDependencies(dependencies);
+        if (!state.services.isEmpty()) {
+            out.setServices(new ArrayList<>(state.services.values()));
+        }
+        if (specMinor >= SPEC_MINOR_COMPOSITIONS && !placeholderRefs.isEmpty()) {
+            out.setCompositions(compositions(placeholderRefs, rootRef));
+        }
+
+        // 6. reproducible document identity: a name-based UUID over the (stable) content of the BOM
+        if (outputTimestamp != null) {
+            out.setSerialNumber(deterministicSerial(rootRef, specVersion, outputTimestamp, state.merged.keySet()));
+        }
         return out;
+    }
+
+    /**
+     * Derives a stable {@code urn:uuid} serial number from the root coordinates, the targeted spec version, the
+     * output timestamp and the sorted bom-refs of the merged components. Same inputs therefore yield the same serial
+     * number, while a changed dependency set yields a different one.
+     */
+    static String deterministicSerial(String rootRef, String specVersion, Instant outputTimestamp,
+                                      Set<String> componentRefs) {
+        StringBuilder seed = new StringBuilder();
+        seed.append(rootRef).append('|')
+                .append(specVersion == null ? "" : specVersion.trim()).append('|')
+                .append(outputTimestamp.truncatedTo(ChronoUnit.SECONDS).getEpochSecond()).append('\n');
+        for (String ref : new java.util.TreeSet<>(componentRefs)) {
+            seed.append(ref).append('\n');
+        }
+        return "urn:uuid:" + UUID.nameUUIDFromBytes(seed.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Returns the CycloneDX {@code 1.x} minor version of the given spec version. Unparsable values
+     * fall back to the oldest supported version, so no unsupported construct is ever emitted.
+     */
+    static int specMinor(String specVersion) {
+        if (isBlank(specVersion)) {
+            return FALLBACK_SPEC_MINOR;
+        }
+        String trimmed = specVersion.trim();
+        if (!trimmed.startsWith("1.")) {
+            return FALLBACK_SPEC_MINOR;
+        }
+        try {
+            int minor = Integer.parseInt(trimmed.substring(2));
+            if (minor < MIN_SPEC_MINOR || minor > MAX_SPEC_MINOR) {
+                return FALLBACK_SPEC_MINOR;
+            }
+            return minor;
+        } catch (NumberFormatException e) {
+            return FALLBACK_SPEC_MINOR;
+        }
+    }
+
+    /** Records this plugin in {@code metadata.tools}, using the model the spec version supports. */
+    static void addTooling(Metadata metadata, int specMinor) {
+        String version = pluginVersion();
+        if (specMinor >= SPEC_MINOR_TOOLS_COMPONENTS) {
+            Component tool = new Component();
+            tool.setType(Component.Type.APPLICATION);
+            tool.setGroup(PLUGIN_GROUP_ID);
+            tool.setName(PLUGIN_ARTIFACT_ID);
+            tool.setVersion(version);
+            List<Component> tools = new ArrayList<>();
+            tools.add(tool);
+            ToolInformation toolInformation = new ToolInformation();
+            toolInformation.setComponents(tools);
+            metadata.setToolChoice(toolInformation);
+        } else {
+            Tool tool = new Tool();
+            tool.setVendor(PLUGIN_GROUP_ID);
+            tool.setName(PLUGIN_ARTIFACT_ID);
+            tool.setVersion(version);
+            metadata.addTool(tool);
+        }
+    }
+
+    /** @return the plugin version when running from a packaged jar, otherwise {@code unknown}. */
+    static String pluginVersion() {
+        Package pluginPackage = SbomMerger.class.getPackage();
+        String version = pluginPackage == null ? null : pluginPackage.getImplementationVersion();
+        return isBlank(version) ? "unknown" : version;
     }
 
     private static Component buildRoot(String groupId, String artifactId, String version, String purl) {
@@ -307,6 +467,93 @@ public final class SbomMerger {
         return flat;
     }
 
+    /**
+     * Returns the service and all of its nested services as a flat list and clears the nested
+     * lists so that every service is emitted exactly once.
+     */
+    private static List<Service> flattenService(Service service) {
+        List<Service> flat = new ArrayList<>();
+        flat.add(service);
+        List<Service> nested = service.getServices();
+        if (nested != null && !nested.isEmpty()) {
+            service.setServices(null);
+            for (Service child : nested) {
+                flat.addAll(flattenService(child));
+            }
+        }
+        return flat;
+    }
+
+    /**
+     * Describes how complete the aggregated inventory is. Emitted from spec 1.4 onwards only, and only
+     * when at least one dependency had no SBOM: the placeholder references are reported as
+     * {@code UNKNOWN} (their dependency graph is unknown) and the root as {@code INCOMPLETE}.
+     */
+    static List<Composition> compositions(Set<String> placeholderRefs, String rootRef) {
+        List<Composition> compositions = new ArrayList<>();
+        Composition unknown = new Composition();
+        unknown.setAggregate(Composition.Aggregate.UNKNOWN);
+        List<BomReference> unknownDependencies = new ArrayList<>();
+        for (String ref : placeholderRefs) {
+            unknownDependencies.add(new BomReference(ref));
+        }
+        unknown.setDependencies(unknownDependencies);
+        compositions.add(unknown);
+
+        Composition incomplete = new Composition();
+        incomplete.setAggregate(Composition.Aggregate.INCOMPLETE);
+        List<BomReference> assemblies = new ArrayList<>();
+        assemblies.add(new BomReference(rootRef));
+        incomplete.setAssemblies(assemblies);
+        compositions.add(incomplete);
+        return compositions;
+    }
+
+    /**
+     * Copies descriptive document metadata (licenses, supplier, manufacturer) from an input BOM that
+     * describes the project itself, without overwriting values the aggregated BOM already has.
+     */
+    static void enrichMetadata(Metadata target, Metadata source) {
+        if (target == null || source == null) {
+            return;
+        }
+        if (target.getLicenses() == null && source.getLicenses() != null) {
+            target.setLicenses(source.getLicenses());
+        }
+        if (target.getSupplier() == null && source.getSupplier() != null) {
+            target.setSupplier(source.getSupplier());
+        }
+        if (target.getManufacturer() == null && source.getManufacturer() != null) {
+            target.setManufacturer(source.getManufacturer());
+        }
+    }
+
+    /**
+     * Returns the union of two external reference lists, keeping the first occurrence of each
+     * {@code type|url} pair so that the result is deterministic and free of duplicates.
+     */
+    static List<ExternalReference> unionExternalReferences(List<ExternalReference> first,
+                                                           List<ExternalReference> second) {
+        if (second == null || second.isEmpty()) {
+            return first;
+        }
+        if (first == null || first.isEmpty()) {
+            return new ArrayList<>(second);
+        }
+        Map<String, ExternalReference> seen = new LinkedHashMap<>();
+        for (ExternalReference reference : first) {
+            if (reference != null && reference.getType() != null && reference.getUrl() != null) {
+                seen.put(reference.getType() + "|" + reference.getUrl(), reference);
+            }
+        }
+        for (ExternalReference reference : second) {
+            if (reference != null && reference.getType() != null && reference.getUrl() != null) {
+                seen.putIfAbsent(reference.getType() + "|" + reference.getUrl(), reference);
+            }
+        }
+        return new ArrayList<>(seen.values());
+    }
+
     private static String gavOf(Component component) {
         if (component == null
                 || component.getGroup() == null
@@ -330,10 +577,15 @@ public final class SbomMerger {
         private final Map<String, String> purlIndex = new HashMap<>();
         private final Map<String, String> gavIndex = new HashMap<>();
         private final Set<String> usedRefs = new HashSet<>();
+        private final Map<String, Service> services = new LinkedHashMap<>();
+        private final Map<String, String> serviceRefIndex = new HashMap<>();
+        private final Map<String, String> serviceGavIndex = new HashMap<>();
+        private final Component rootComponent;
 
-        State(String rootRef, String rootGav) {
+        State(String rootRef, String rootGav, Component rootComponent) {
             this.rootRef = rootRef;
             this.rootGav = rootGav;
+            this.rootComponent = rootComponent;
             usedRefs.add(rootRef);
             purlIndex.put(rootRef, rootRef);
             gavIndex.put(rootGav, rootRef);
@@ -363,12 +615,16 @@ public final class SbomMerger {
             }
 
             if (existing != null) {
-                if (!rootRef.equals(existing)) {
-                    Component survivor = merged.get(existing);
-                    if (survivor != null) {
-                        enrich(survivor, component);
-                        index(survivor, existing);
-                    }
+                Component survivor = merged.get(existing);
+                if (survivor != null) {
+                    // Enrich the survivor with descriptive/fingerprint data from the candidate.
+                    enrich(survivor, component);
+                    index(survivor, existing);
+                } else if (rootRef.equals(existing)) {
+                    // The project's own metadata component: the root keeps its identity (group, name,
+                    // version, purl, bom-ref), but picks up description, licenses, supplier, hashes
+                    // and external references from the input BOM.
+                    enrich(rootComponent, component);
                 }
                 if (!isBlank(originalRef)) {
                     localMap.put(originalRef, existing);
@@ -402,10 +658,9 @@ public final class SbomMerger {
                     || isBlank(missingDependency.getVersion())) {
                 return null;
             }
-            String purl = String.format("pkg:maven/%s/%s@%s",
-                    missingDependency.getGroupId(),
+            String purl = Purls.maven(missingDependency.getGroupId(),
                     missingDependency.getArtifactId(),
-                    missingDependency.getVersion());
+                    missingDependency.getVersion(), null, null);
             String gav = missingDependency.toString();
 
             String existing = purlIndex.get(purl);
@@ -423,6 +678,9 @@ public final class SbomMerger {
             placeholder.setVersion(missingDependency.getVersion());
             placeholder.setPurl(purl);
             placeholder.setBomRef(purl);
+            List<Property> properties = new ArrayList<>();
+            properties.add(new Property(PROPERTY_MISSING_SBOM, "true"));
+            placeholder.setProperties(properties);
 
             merged.put(purl, placeholder);
             usedRefs.add(purl);
@@ -453,7 +711,87 @@ public final class SbomMerger {
             if (rootRef.equals(reference)) {
                 return rootRef;
             }
-            return merged.containsKey(reference) ? reference : null;
+            if (merged.containsKey(reference) || services.containsKey(reference)) {
+                return reference;
+            }
+            return null;
+        }
+
+        /**
+         * Registers a service and returns the final bom-ref it was mapped to. Services share the
+         * bom-ref namespace with components, so a colliding reference is renamed.
+         */
+        String registerService(Service service, Map<String, String> localMap) {
+            if (service == null) {
+                return null;
+            }
+            String originalRef = service.getBomRef();
+            String gav = serviceGavOf(service);
+
+            String existing = null;
+            if (!isBlank(originalRef)) {
+                existing = serviceRefIndex.get(originalRef);
+            }
+            if (existing == null && gav != null) {
+                existing = serviceGavIndex.get(gav);
+            }
+            if (existing != null) {
+                Service survivor = services.get(existing);
+                if (survivor != null) {
+                    if (isBlank(survivor.getDescription()) && !isBlank(service.getDescription())) {
+                        survivor.setDescription(service.getDescription());
+                    }
+                    survivor.setExternalReferences(unionExternalReferences(
+                            survivor.getExternalReferences(), service.getExternalReferences()));
+                }
+                mapService(localMap, originalRef, existing, gav);
+                return existing;
+            }
+
+            String finalRef = originalRef;
+            if (isBlank(finalRef) || usedRefs.contains(finalRef)) {
+                String base = isBlank(service.getName()) ? "service" : service.getName();
+                if (!isBlank(service.getVersion())) {
+                    base = base + "@" + service.getVersion();
+                }
+                finalRef = base;
+                int counter = 2;
+                while (usedRefs.contains(finalRef)) {
+                    finalRef = base + "#" + counter;
+                    counter++;
+                }
+            }
+            service.setBomRef(finalRef);
+            services.put(finalRef, service);
+            usedRefs.add(finalRef);
+            serviceRefIndex.put(finalRef, finalRef);
+            if (gav != null) {
+                serviceGavIndex.putIfAbsent(gav, finalRef);
+            }
+            mapService(localMap, originalRef, finalRef, gav);
+            return finalRef;
+        }
+
+        private void mapService(Map<String, String> localMap, String originalRef, String finalRef, String gav) {
+            if (localMap != null) {
+                if (!isBlank(originalRef)) {
+                    localMap.put(originalRef, finalRef);
+                }
+                if (gav != null) {
+                    localMap.putIfAbsent(gav, finalRef);
+                }
+                localMap.putIfAbsent(finalRef, finalRef);
+            }
+            if (!isBlank(originalRef)) {
+                serviceRefIndex.put(originalRef, finalRef);
+            }
+        }
+
+        private static String serviceGavOf(Service service) {
+            if (isBlank(service.getGroup()) || isBlank(service.getName()) || isBlank(service.getVersion())) {
+                return null;
+            }
+            return service.getGroup() + ":" + service.getName() + ":" + service.getVersion();
         }
 
         private void index(Component component, String ref) {
@@ -486,22 +824,102 @@ public final class SbomMerger {
             return unique;
         }
 
+        private boolean licenseChoiceEmpty(LicenseChoice lc) {
+            if (lc == null) return true;
+            List<License> list = lc.getLicenses();
+            org.cyclonedx.model.license.Expression expr = lc.getExpression();
+            return (list == null || list.isEmpty()) && (expr == null || isBlank(expr.getValue()));
+        }
+
         private void enrich(Component survivor, Component candidate) {
-            if (survivor.getGroup() == null) {
-                survivor.setGroup(candidate.getGroup());
+            // For non-root components, fill missing identity fields from the candidate when absent.
+            if (survivor != null && survivor != this.rootComponent) {
+                if (isBlank(survivor.getGroup()) && candidate.getGroup() != null) {
+                    survivor.setGroup(candidate.getGroup());
+                }
+                if (isBlank(survivor.getName()) && candidate.getName() != null) {
+                    survivor.setName(candidate.getName());
+                }
+                if (isBlank(survivor.getVersion()) && candidate.getVersion() != null) {
+                    survivor.setVersion(candidate.getVersion());
+                }
+                if (isBlank(survivor.getPurl()) && candidate.getPurl() != null) {
+                    survivor.setPurl(candidate.getPurl());
+                }
+                if (survivor.getType() == null && candidate.getType() != null) {
+                    survivor.setType(candidate.getType());
+                }
             }
-            if (survivor.getName() == null) {
-                survivor.setName(candidate.getName());
+
+            // descriptive and fingerprint fields only
+            if (survivor.getDescription() == null && candidate.getDescription() != null) {
+                survivor.setDescription(candidate.getDescription());
             }
-            if (survivor.getVersion() == null) {
-                survivor.setVersion(candidate.getVersion());
+
+            // supplier: OrganizationalEntity
+            if ((survivor.getSupplier() == null || isBlank(survivor.getSupplier().getName())) && candidate.getSupplier() != null) {
+                survivor.setSupplier(candidate.getSupplier());
             }
-            if (survivor.getPurl() == null) {
-                survivor.setPurl(candidate.getPurl());
+
+            // author is a String
+            if (survivor.getAuthor() == null && candidate.getAuthor() != null) {
+                survivor.setAuthor(candidate.getAuthor());
             }
-            if (survivor.getType() == null) {
-                survivor.setType(candidate.getType());
+
+            // licenses: org.cyclonedx.model.LicenseChoice
+            if (licenseChoiceEmpty(survivor.getLicenses())) {
+                if (!licenseChoiceEmpty(candidate.getLicenses())) {
+                    survivor.setLicenses(candidate.getLicenses());
+                }
+            } else {
+                // survivor has licenses; do not merge or override
             }
+
+            // union hashes by algorithm:value(lowercase)
+            List<Hash> sHashes = survivor.getHashes();
+            List<Hash> cHashes = candidate.getHashes();
+            if ((sHashes == null || sHashes.isEmpty()) && (cHashes != null && !cHashes.isEmpty())) {
+                survivor.setHashes(new ArrayList<>(cHashes));
+            } else if (cHashes != null && !cHashes.isEmpty()) {
+                Map<String, Hash> seen = new LinkedHashMap<>();
+                if (sHashes != null) {
+                    for (Hash h : sHashes) {
+                        if (h != null && h.getAlgorithm() != null && h.getValue() != null) {
+                            seen.put(h.getAlgorithm() + ":" + h.getValue().toLowerCase(Locale.ROOT), h);
+                        }
+                    }
+                }
+                for (Hash h : cHashes) {
+                    if (h != null && h.getAlgorithm() != null && h.getValue() != null) {
+                        seen.putIfAbsent(h.getAlgorithm() + ":" + h.getValue().toLowerCase(Locale.ROOT), h);
+                    }
+                }
+                survivor.setHashes(new ArrayList<>(seen.values()));
+            }
+
+            // union externalReferences by type|url
+            List<ExternalReference> sRefs = survivor.getExternalReferences();
+            List<ExternalReference> cRefs = candidate.getExternalReferences();
+            if ((sRefs == null || sRefs.isEmpty()) && (cRefs != null && !cRefs.isEmpty())) {
+                survivor.setExternalReferences(new ArrayList<>(cRefs));
+            } else if (cRefs != null && !cRefs.isEmpty()) {
+                Map<String, ExternalReference> seen = new LinkedHashMap<>();
+                if (sRefs != null) {
+                    for (ExternalReference r : sRefs) {
+                        if (r != null && r.getType() != null && r.getUrl() != null) {
+                            seen.put(r.getType() + "|" + r.getUrl(), r);
+                        }
+                    }
+                }
+                for (ExternalReference r : cRefs) {
+                    if (r != null && r.getType() != null && r.getUrl() != null) {
+                        seen.putIfAbsent(r.getType() + "|" + r.getUrl(), r);
+                    }
+                }
+                survivor.setExternalReferences(new ArrayList<>(seen.values()));
+            }
+
+            // do NOT merge properties to avoid overwriting the placeholder marker
         }
     }
 }
