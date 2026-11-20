@@ -19,6 +19,7 @@ package nl.patropia.maven.plugin;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
+import org.apache.maven.plugin.logging.Log;
 import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
@@ -32,6 +33,7 @@ import org.cyclonedx.generators.json.BomJsonGenerator;
 import org.cyclonedx.generators.xml.BomXmlGenerator;
 import org.cyclonedx.model.Bom;
 import org.cyclonedx.parsers.JsonParser;
+import org.cyclonedx.parsers.Parser;
 import org.cyclonedx.parsers.XmlParser;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
@@ -53,6 +55,9 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.Locale;
 import java.util.Objects;
 
@@ -138,6 +143,32 @@ public class AggregateSbomMojo extends AbstractMojo {
     private String specVersion;
 
     /**
+     * Optional output timestamp to make generated SBOMs deterministic. Accepts ISO-8601 or epoch
+     * seconds. When unset or blank the plugin will use the current time and a random serial.
+     */
+    @Parameter(property = "sbomAggregator.outputTimestamp", defaultValue = "${project.build.outputTimestamp}")
+    private String outputTimestamp;
+
+    /** Maximum size for input SBOM files. Accepts bytes or with KB/MB/GB suffix (case-insensitive); 0 = unlimited. */
+    @Parameter(property = "sbomAggregator.maxSbomSize", defaultValue = "50MB")
+    private String maxSbomSize = "50MB";
+
+    /**
+     * Validate the aggregated SBOM against the official CycloneDX JSON/XML schema of the configured
+     * {@code specVersion} before it is written. A document that does not conform fails the build and no
+     * output file is produced. Set to {@code false} to skip validation.
+     */
+    @Parameter(property = "sbomAggregator.validateOutput", defaultValue = "true")
+    private boolean validateOutput = true;
+
+    /** When true, a dependency SBOM that fails to parse will fail the build; when false, the dependency will be treated as missing and a placeholder will be emitted. */
+    @Parameter(property = "sbomAggregator.failOnInvalidSbom", defaultValue = "true")
+    private boolean failOnInvalidSbom = true;
+
+    // parsed value in bytes; computed early during validateConfiguration()
+    private long maxSbomBytes = 0L;
+
+    /**
      * Whether to fail the build if a collected dependency lacks an attached SBOM.
      * <p>
      * Applies to every dependency the plugin inspects: direct dependencies by default, and also
@@ -205,10 +236,12 @@ public class AggregateSbomMojo extends AbstractMojo {
         getLog().debug("Spec version: " + specVersion);
 
         List<File> sbomFilesToMerge = new ArrayList<>();
+        LinkedHashMap<File, DepCoord> fileToDep = new LinkedHashMap<>();
 
         // 1. Collect base project SBOM
         if (projectSbom.exists()) {
             sbomFilesToMerge.add(projectSbom);
+            fileToDep.put(projectSbom, null);
             getLog().debug("Found base project SBOM");
         } else {
             getLog().warn("Base project SBOM not found at: " + projectSbom.getAbsolutePath());
@@ -237,6 +270,7 @@ public class AggregateSbomMojo extends AbstractMojo {
                         File resolvedFile = result.getArtifact().getFile();
                         if (resolvedFile != null && resolvedFile.exists()) {
                             sbomFilesToMerge.add(resolvedFile);
+                            fileToDep.put(resolvedFile, dep);
                             getLog().debug("Resolved SBOM for " + depId + " (" + extension + ":" + classifier + ")");
                             resolved = true;
                             break; // Stop trying other classifiers once we find one
@@ -263,7 +297,32 @@ public class AggregateSbomMojo extends AbstractMojo {
             }
         }
 
-        // Summary reporting for missing SBOMs
+        // 3. Parse BOMs using a content-based reader with a size guard
+        List<Bom> boms = new ArrayList<>();
+        SbomInputReader reader = new SbomInputReader(maxSbomBytes);
+
+        for (File file : sbomFilesToMerge) {
+            try {
+                Bom parsedBom = reader.read(file);
+                if (parsedBom != null) {
+                    boms.add(parsedBom);
+                }
+            } catch (SbomInputReader.InvalidSbomException e) {
+                DepCoord owner = fileToDep.get(file);
+                // Always fail for the project's own SBOM; dependency SBOMs only fail when failOnInvalidSbom is set.
+                if (owner == null || failOnInvalidSbom) {
+                    throw new MojoExecutionException(e.getMessage(), e);
+                }
+                getLog().warn(e.getMessage());
+                missingSboms.add(new SbomMerger.MissingDependency(owner.groupId, owner.artifactId, owner.version));
+            }
+        }
+
+        if (boms.isEmpty() && missingSboms.isEmpty()) {
+            getLog().warn("No SBOM files available to aggregate - creating minimal SBOM");
+        }
+
+        // Summary reporting for missing SBOMs (including dependencies downgraded from invalid to missing)
         if (!missingSboms.isEmpty()) {
             getLog().warn("Missing SBOMs for " + missingSboms.size() + " dependencies");
             getLog().debug("Dependencies without SBOMs: " + missingSboms);
@@ -274,38 +333,15 @@ public class AggregateSbomMojo extends AbstractMojo {
             }
         }
 
-        // 3. Parse BOMs using JsonParser or XmlParser
-        List<Bom> boms = new ArrayList<>();
-
-        for (File file : sbomFilesToMerge) {
-            try {
-                Bom parsedBom;
-                if (file.getName().toLowerCase(Locale.ROOT).endsWith(".xml")) {
-                    parsedBom = new XmlParser().parse(file);
-                } else {
-                    parsedBom = new JsonParser().parse(file);
-                }
-
-                if (parsedBom != null) {
-                    boms.add(parsedBom);
-                }
-            } catch (Exception e) {
-                getLog().error("Failed to parse SBOM file: " + file.getAbsolutePath(), e);
-                throw new MojoExecutionException("Error parsing SBOM: " + file.getName(), e);
-            }
-        }
-
-        if (boms.isEmpty() && missingSboms.isEmpty()) {
-            getLog().warn("No SBOM files available to aggregate - creating minimal SBOM");
-        }
-
         getLog().debug("Merging " + boms.size() + " BOMs in-memory");
         Bom mergedBom = SbomMerger.merge(
                 project.getGroupId(),
                 project.getArtifactId(),
                 project.getVersion(),
+                specVersion,
                 boms,
-                missingSboms);
+                missingSboms,
+                parseOutputTimestamp(outputTimestamp));
 
         // 4. Serialize and output merged BOM
         File outputFile = new File(outputDirectory, outputName + "." + outputExtension());
@@ -440,6 +476,7 @@ public class AggregateSbomMojo extends AbstractMojo {
         }
         SpecValidation.validateSpecVersion(specVersion);
         SpecValidation.validateOutputExtension(outputExtension);
+        maxSbomBytes = SpecValidation.parseMaxBytes(maxSbomSize);
 
         // validate outputName to avoid writing outside the output directory
         if (outputName == null || outputName.trim().isEmpty()) {
@@ -476,6 +513,39 @@ public class AggregateSbomMojo extends AbstractMojo {
     }
 
     /**
+     * Parses the configured output timestamp following Maven's own {@code project.build.outputTimestamp} rules.
+     *
+     * @param value the raw configuration value; may be {@code null}
+     * @return the parsed instant, or {@code null} when reproducible output is disabled (value unset, blank or a
+     *         single character such as the Maven placeholder {@code -})
+     * @throws MojoExecutionException when the value is neither ISO-8601 nor epoch seconds
+     */
+    static Instant parseOutputTimestamp(String value) throws MojoExecutionException {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() <= 1) {
+            // Maven treats an empty value and the placeholder "-" as "reproducible output disabled".
+            return null;
+        }
+        if (trimmed.chars().allMatch(Character::isDigit)) {
+            try {
+                return Instant.ofEpochSecond(Long.parseLong(trimmed));
+            } catch (NumberFormatException e) {
+                throw new MojoExecutionException("Invalid sbomAggregator.outputTimestamp '" + value
+                        + "': expected ISO-8601 (e.g. 2024-01-01T00:00:00Z) or epoch seconds", e);
+            }
+        }
+        try {
+            return OffsetDateTime.parse(trimmed).toInstant();
+        } catch (DateTimeParseException e) {
+            throw new MojoExecutionException("Invalid sbomAggregator.outputTimestamp '" + value
+                    + "': expected ISO-8601 (e.g. 2024-01-01T00:00:00Z) or epoch seconds", e);
+        }
+    }
+
+    /**
      * Merges the given BOMs. Retained as a thin wrapper around {@link SbomMerger#merge} for
      * callers that still hold Maven coordinates as {@code groupId:artifactId:version} strings.
      */
@@ -493,8 +563,10 @@ public class AggregateSbomMojo extends AbstractMojo {
                 mavenProject.getGroupId(),
                 mavenProject.getArtifactId(),
                 mavenProject.getVersion(),
+                specVersion,
                 parsedBoms == null ? Collections.emptyList() : parsedBoms,
-                missing);
+                missing,
+                null);
     }
 
     /**
@@ -513,6 +585,11 @@ public class AggregateSbomMojo extends AbstractMojo {
                 content = generator.toXmlString();
             }
 
+            if (validateOutput) {
+                validateBomContent(content.getBytes(StandardCharsets.UTF_8), outputExtension(),
+                        targetVersion, specVersion, getLog());
+            }
+
             File parent = outputFile.getParentFile();
             if (parent != null) {
                 Files.createDirectories(parent.toPath());
@@ -527,11 +604,67 @@ public class AggregateSbomMojo extends AbstractMojo {
         getLog().debug("Generated SBOM: " + outputFile.length() + " bytes");
     }
 
+    /**
+     * Validates serialised SBOM bytes against the official CycloneDX schema for the given version.
+     *
+     * @param content       the serialised SBOM document
+     * @param extension     output extension, {@code json} or {@code xml}
+     * @param schemaVersion CycloneDX schema version to validate against
+     * @param specVersion   the configured spec version, used only in the error message
+     * @throws MojoExecutionException when the document does not conform to the schema
+     */
+    static void validateBomContent(byte[] content, String extension, Version schemaVersion, String specVersion)
+            throws MojoExecutionException {
+        validateBomContent(content, extension, schemaVersion, specVersion, null);
+    }
+
+    /**
+     * Same as {@link #validateBomContent(byte[], String, Version, String)} but logs every schema problem at debug
+     * level before failing, so a broken build can be diagnosed without re-running the plugin.
+     *
+     * @param content       the serialised SBOM document
+     * @param extension     output extension, {@code json} or {@code xml}
+     * @param schemaVersion CycloneDX schema version to validate against
+     * @param specVersion   the configured spec version, used only in the error message
+     * @param log           logger used for the debug output; may be {@code null}
+     * @throws MojoExecutionException when the document does not conform to the schema
+     */
+    static void validateBomContent(byte[] content, String extension, Version schemaVersion, String specVersion,
+                                   Log log)
+            throws MojoExecutionException {
+        Parser parser = "xml".equals(extension) ? new XmlParser() : new JsonParser();
+        List<org.cyclonedx.exception.ParseException> problems;
+        try {
+            problems = parser.validate(content, schemaVersion);
+        } catch (IOException e) {
+            throw new MojoExecutionException("Failed to validate the generated SBOM: " + e.getMessage(), e);
+        }
+        if (problems != null && !problems.isEmpty()) {
+            if (log != null) {
+                log.debug("CycloneDX " + specVersion + " schema reported " + problems.size()
+                        + " problem(s) for the generated SBOM:");
+                for (int i = 0; i < problems.size(); i++) {
+                    log.debug("  [" + (i + 1) + "] " + problems.get(i).getMessage());
+                }
+            }
+            throw new MojoExecutionException("Generated SBOM does not conform to the CycloneDX " + specVersion
+                    + " " + extension.toUpperCase(Locale.ROOT) + " schema: " + problems.get(0).getMessage());
+        }
+    }
+
     // Package-private setters for unit tests.
 
     void setSpecVersion(String specVersion) {
         this.specVersion = specVersion;
     }
+
+    void setOutputTimestamp(String outputTimestamp) { this.outputTimestamp = outputTimestamp; }
+
+    void setMaxSbomSize(String maxSbomSize) { this.maxSbomSize = maxSbomSize; }
+
+    void setValidateOutput(boolean validateOutput) { this.validateOutput = validateOutput; }
+
+    void setFailOnInvalidSbom(boolean failOnInvalidSbom) { this.failOnInvalidSbom = failOnInvalidSbom; }
 
     void setOutputExtension(String outputExtension) {
         this.outputExtension = outputExtension;

@@ -1,0 +1,4 @@
+{
+  "secretToken": "SECRET-TOKEN-123",
+  "components": [
+    { "type": "library", "name": "broken",

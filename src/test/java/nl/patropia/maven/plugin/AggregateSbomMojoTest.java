@@ -276,4 +276,39 @@ class AggregateSbomMojoTest {
         assertNotNull(rootDep.getDependencies(), "Root should have child dependencies");
         assertFalse(rootDep.getDependencies().isEmpty(), "Root should have at least one child");
     }
+
+    // ------------------------------------------------------------------ parseOutputTimestamp
+
+    @Test
+    void parseOutputTimestampAcceptsIsoWithOffset() throws Exception {
+        assertEquals(java.time.Instant.parse("2024-01-01T08:00:00Z"),
+                AggregateSbomMojo.parseOutputTimestamp("2024-01-01T10:00:00+02:00"));
+        assertEquals(java.time.Instant.parse("2024-01-01T00:00:00Z"),
+                AggregateSbomMojo.parseOutputTimestamp(" 2024-01-01T00:00:00Z "));
+    }
+
+    @Test
+    void parseOutputTimestampAcceptsEpochSeconds() throws Exception {
+        assertEquals(java.time.Instant.ofEpochSecond(1704067200L),
+                AggregateSbomMojo.parseOutputTimestamp("1704067200"));
+    }
+
+    @Test
+    void parseOutputTimestampTreatsEmptyAndPlaceholderAsDisabled() throws Exception {
+        assertNull(AggregateSbomMojo.parseOutputTimestamp(null));
+        assertNull(AggregateSbomMojo.parseOutputTimestamp(""));
+        assertNull(AggregateSbomMojo.parseOutputTimestamp("  "));
+        assertNull(AggregateSbomMojo.parseOutputTimestamp("-"));
+    }
+
+    @Test
+    void parseOutputTimestampRejectsInvalidValues() {
+        for (String bad : Arrays.asList("abc", "-123", "2024-13-01T00:00:00Z")) {
+            org.apache.maven.plugin.MojoExecutionException error = assertThrows(
+                    org.apache.maven.plugin.MojoExecutionException.class,
+                    () -> AggregateSbomMojo.parseOutputTimestamp(bad));
+            assertTrue(error.getMessage().contains("sbomAggregator.outputTimestamp"), error.getMessage());
+            assertTrue(error.getMessage().contains(bad), error.getMessage());
+        }
+    }
 }

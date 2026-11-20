@@ -59,12 +59,16 @@ class ParameterPropertyNamingTest {
             "outputClassifier",
             "outputExtension",
             "specVersion",
+            "outputTimestamp",
             "dependencyClassifiers",
             "dependencyExtensions",
             "includeTransitive",
             "includeScopes",
             "excludes",
             "failOnMissingSbom",
+            "maxSbomSize",
+            "failOnInvalidSbom",
+            "validateOutput",
             "attach",
             "skip"));
 

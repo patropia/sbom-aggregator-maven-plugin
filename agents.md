@@ -56,12 +56,16 @@ The README.md is the authoritative source used by unit tests for parameter names
 - attach                     -> sbomAggregator.attach (boolean)             Default: true
 - skip                       -> sbomAggregator.skip (boolean)               Default: false
 - specVersion                -> sbomAggregator.specVersion (String)        Default: 1.5
+- outputTimestamp            -> sbomAggregator.outputTimestamp (String)    Default: ${project.build.outputTimestamp}
+- maxSbomSize                -> sbomAggregator.maxSbomSize (String)        Default: 50MB (bytes or KB/MB/GB; 0 = unlimited)
+- failOnInvalidSbom          -> sbomAggregator.failOnInvalidSbom (boolean) Default: true
 - failOnMissingSbom          -> sbomAggregator.failOnMissingSbom (boolean) Default: false
 
 Notes:
 
 - Only the `sbomAggregator.*` user properties are honoured on the command line; bare `-D` names (for example `-DspecVersion=1.6`) are ignored.
-- `failOnMissingSbom` applies to every collected dependency: the direct ones, plus the transitive ones when `includeTransitive=true`.
+- `failOnMissingSbom` applies to every collected dependency: the direct ones, plus the transitive ones when `includeTransitive=true`. It is evaluated after parsing, so a dependency SBOM downgraded to missing by `failOnInvalidSbom=false` also counts.
+- Input SBOMs are read by SbomInputReader: JSON/XML is detected from the content (not the file extension), files above `maxSbomSize` are rejected and parse errors never echo file contents.
 - Legacy parameter names `sbomClassifier` and `sbomExtension` no longer exist; do not use them.
 
 Adding a new configuration parameter
