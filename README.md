@@ -72,6 +72,7 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
 | `attach` | `sbomAggregator.attach` | `boolean` | `true` | Whether to attach the aggregated SBOM as a project artifact. |
 | `skip` | `sbomAggregator.skip` | `boolean` | `false` | Skip execution of the plugin. |
 | `specVersion` | `sbomAggregator.specVersion` | `String` | `1.5` | Target CycloneDX specification version (`1.3`, `1.4`, `1.5`, `1.6`, `1.7`). |
+| `outputTimestamp` | `sbomAggregator.outputTimestamp` | `String` | `${project.build.outputTimestamp}` | ISO-8601 or epoch seconds; when set the plugin will use a fixed timestamp and derive a name-based urn:uuid serialNumber for reproducible outputs. |
 | `failOnMissingSbom` | `sbomAggregator.failOnMissingSbom` | `boolean` | `false` | Fails the build if any collected dependency (direct, plus transitive when `includeTransitive=true`) fails to provide an attached SBOM. |
 
 ---

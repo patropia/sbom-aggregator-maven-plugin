@@ -53,6 +53,9 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.Locale;
 import java.util.Objects;
 
@@ -136,6 +139,13 @@ public class AggregateSbomMojo extends AbstractMojo {
      */
     @Parameter(property = "sbomAggregator.specVersion", defaultValue = "1.5")
     private String specVersion;
+
+    /**
+     * Optional output timestamp to make generated SBOMs deterministic. Accepts ISO-8601 or epoch
+     * seconds. When unset or blank the plugin will use the current time and a random serial.
+     */
+    @Parameter(property = "sbomAggregator.outputTimestamp", defaultValue = "${project.build.outputTimestamp}")
+    private String outputTimestamp;
 
     /**
      * Whether to fail the build if a collected dependency lacks an attached SBOM.
@@ -304,8 +314,10 @@ public class AggregateSbomMojo extends AbstractMojo {
                 project.getGroupId(),
                 project.getArtifactId(),
                 project.getVersion(),
+                specVersion,
                 boms,
-                missingSboms);
+                missingSboms,
+                parseOutputTimestamp(outputTimestamp));
 
         // 4. Serialize and output merged BOM
         File outputFile = new File(outputDirectory, outputName + "." + outputExtension());
@@ -476,6 +488,39 @@ public class AggregateSbomMojo extends AbstractMojo {
     }
 
     /**
+     * Parses the configured output timestamp following Maven's own {@code project.build.outputTimestamp} rules.
+     *
+     * @param value the raw configuration value; may be {@code null}
+     * @return the parsed instant, or {@code null} when reproducible output is disabled (value unset, blank or a
+     *         single character such as the Maven placeholder {@code -})
+     * @throws MojoExecutionException when the value is neither ISO-8601 nor epoch seconds
+     */
+    static Instant parseOutputTimestamp(String value) throws MojoExecutionException {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() <= 1) {
+            // Maven treats an empty value and the placeholder "-" as "reproducible output disabled".
+            return null;
+        }
+        if (trimmed.chars().allMatch(Character::isDigit)) {
+            try {
+                return Instant.ofEpochSecond(Long.parseLong(trimmed));
+            } catch (NumberFormatException e) {
+                throw new MojoExecutionException("Invalid sbomAggregator.outputTimestamp '" + value
+                        + "': expected ISO-8601 (e.g. 2024-01-01T00:00:00Z) or epoch seconds", e);
+            }
+        }
+        try {
+            return OffsetDateTime.parse(trimmed).toInstant();
+        } catch (DateTimeParseException e) {
+            throw new MojoExecutionException("Invalid sbomAggregator.outputTimestamp '" + value
+                    + "': expected ISO-8601 (e.g. 2024-01-01T00:00:00Z) or epoch seconds", e);
+        }
+    }
+
+    /**
      * Merges the given BOMs. Retained as a thin wrapper around {@link SbomMerger#merge} for
      * callers that still hold Maven coordinates as {@code groupId:artifactId:version} strings.
      */
@@ -493,8 +538,10 @@ public class AggregateSbomMojo extends AbstractMojo {
                 mavenProject.getGroupId(),
                 mavenProject.getArtifactId(),
                 mavenProject.getVersion(),
+                specVersion,
                 parsedBoms == null ? Collections.emptyList() : parsedBoms,
-                missing);
+                missing,
+                null);
     }
 
     /**
@@ -532,6 +579,8 @@ public class AggregateSbomMojo extends AbstractMojo {
     void setSpecVersion(String specVersion) {
         this.specVersion = specVersion;
     }
+
+    void setOutputTimestamp(String outputTimestamp) { this.outputTimestamp = outputTimestamp; }
 
     void setOutputExtension(String outputExtension) {
         this.outputExtension = outputExtension;

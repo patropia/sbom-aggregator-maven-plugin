@@ -59,6 +59,7 @@ class ParameterPropertyNamingTest {
             "outputClassifier",
             "outputExtension",
             "specVersion",
+            "outputTimestamp",
             "dependencyClassifiers",
             "dependencyExtensions",
             "includeTransitive",
