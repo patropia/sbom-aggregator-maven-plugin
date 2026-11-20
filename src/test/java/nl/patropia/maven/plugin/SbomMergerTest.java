@@ -64,7 +64,7 @@ class SbomMergerTest {
     }
 
     private static Bom merge(List<Bom> boms, List<SbomMerger.MissingDependency> missing) {
-        return SbomMerger.merge(ROOT_GROUP, ROOT_ARTIFACT, ROOT_VERSION, boms, missing);
+        return SbomMerger.merge(ROOT_GROUP, ROOT_ARTIFACT, ROOT_VERSION, "1.5", boms, missing, null);
     }
 
     private static Component componentByName(Bom bom, String name) {
@@ -548,10 +548,10 @@ class SbomMergerTest {
     @Test
     void rejectsNullMavenCoordinates() {
         assertThrows(NullPointerException.class,
-                () -> SbomMerger.merge(null, "root", "1.0.0", null, null));
+                () -> SbomMerger.merge(null, "root", "1.0.0", "1.5", null, null, null));
         assertThrows(NullPointerException.class,
-                () -> SbomMerger.merge("com.acme", null, "1.0.0", null, null));
+                () -> SbomMerger.merge("com.acme", null, "1.0.0", "1.5", null, null, null));
         assertThrows(NullPointerException.class,
-                () -> SbomMerger.merge("com.acme", "root", null, null, null));
+                () -> SbomMerger.merge("com.acme", "root", null, "1.5", null, null, null));
     }
 }
