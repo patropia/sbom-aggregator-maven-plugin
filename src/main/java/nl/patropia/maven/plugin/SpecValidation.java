@@ -106,4 +106,55 @@ public final class SpecValidation {
                         + "'. Supported values: " + SUPPORTED_SPEC_VERSIONS);
         }
     }
+
+    /**
+     * Parse a human friendly size string into a number of bytes.
+     * Accepts a plain decimal number (bytes) or with a suffix: KB, MB, GB (case-insensitive).
+     * 0 means no limit.
+     *
+     * @param size the user supplied string
+     * @return the number of bytes
+     * @throws MojoExecutionException when the value is malformed or negative
+     */
+    public static long parseMaxBytes(String size) throws MojoExecutionException {
+        if (size == null) {
+            throw new MojoExecutionException("maxInputSize is required");
+        }
+        String s = size.trim();
+        if (s.isEmpty()) {
+            throw new MojoExecutionException("maxInputSize must not be empty");
+        }
+        String unit = "";
+        int i = s.length() - 1;
+        while (i >= 0 && !Character.isDigit(s.charAt(i))) i--;
+        if (i < s.length() - 1) {
+            unit = s.substring(i + 1).trim().toUpperCase(Locale.ROOT);
+            s = s.substring(0, i + 1).trim();
+        }
+        long value;
+        try {
+            value = Long.parseLong(s);
+        } catch (NumberFormatException e) {
+            throw new MojoExecutionException("Invalid maxInputSize value '" + size + "'");
+        }
+        if (value < 0) throw new MojoExecutionException("maxInputSize must not be negative: '" + size + "'");
+        switch (unit) {
+            case "":
+                return value;
+            case "KB":
+                try { return Math.multiplyExact(value, 1024L); } catch (ArithmeticException ae) {
+                    throw new MojoExecutionException("maxInputSize too large: '" + size + "'");
+                }
+            case "MB":
+                try { return Math.multiplyExact(value, 1024L * 1024L); } catch (ArithmeticException ae) {
+                    throw new MojoExecutionException("maxInputSize too large: '" + size + "'");
+                }
+            case "GB":
+                try { return Math.multiplyExact(value, 1024L * 1024L * 1024L); } catch (ArithmeticException ae) {
+                    throw new MojoExecutionException("maxInputSize too large: '" + size + "'");
+                }
+            default:
+                throw new MojoExecutionException("Unknown size unit in maxInputSize: '" + size + "' (supported: KB, MB, GB)");
+        }
+    }
 }
