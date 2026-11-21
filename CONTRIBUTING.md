@@ -80,7 +80,7 @@ After installing the plugin locally with `mvn clean install`, you can test it in
 <plugin>
     <groupId>nl.patropia.maven.plugin</groupId>
     <artifactId>sbom-aggregator-maven-plugin</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.1.0-SNAPSHOT</version>
     <executions>
         <execution>
             <phase>verify</phase>

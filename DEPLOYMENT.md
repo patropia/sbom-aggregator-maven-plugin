@@ -53,10 +53,10 @@ mvn clean verify -Prun-its
 
 ```bash
 # Create a tag for the release
-git tag -a v1.0.0 -m "Release version 1.0.0"
+git tag -a v1.1.0 -m "Release version 1.1.0"
 
 # Push the tag to GitHub
-git push origin v1.0.0
+git push origin v1.1.0
 ```
 
 ### 3. Automated Deployment
@@ -115,7 +115,7 @@ Create or update `~/.m2/settings.xml`:
 
 ```bash
 # Update version to release version
-mvn versions:set -DnewVersion=1.0.0
+mvn versions:set -DnewVersion=1.1.0
 
 # Deploy to Maven Central
 mvn clean deploy -P release
@@ -129,20 +129,20 @@ mvn clean deploy -P release
 
 ```bash
 # Create and push tag
-git tag -a v1.0.0 -m "Release version 1.0.0"
-git push origin v1.0.0
+git tag -a v1.1.0 -m "Release version 1.1.0"
+git push origin v1.1.0
 
 # Create release via GitHub UI or CLI
-gh release create v1.0.0 --title "Release 1.0.0" --notes "See CHANGELOG.md"
+gh release create v1.1.0 --title "Release 1.1.0" --notes "See CHANGELOG.md"
 ```
 
 ## Post-Release
 
 1. **Update to Next Development Version**
    ```bash
-   mvn versions:set -DnewVersion=1.1.0-SNAPSHOT
+   mvn versions:set -DnewVersion=1.1.1-SNAPSHOT
    git add pom.xml
-   git commit -m "chore: bump version to 1.1.0-SNAPSHOT"
+   git commit -m "chore: bump version to 1.1.1-SNAPSHOT"
    git push origin main
    ```
 
