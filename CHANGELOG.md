@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-20
+
+> **Versioning note:** this release contains one breaking change (the
+> `sbomAggregator.*` property prefix below) but is deliberately published as a
+> minor version. 1.0.0 was tagged in git but never published to Maven Central,
+> so no Central consumer can be affected. From 1.1.0 onwards, breaking changes
+> will bump the major version as Semantic Versioning requires.
+
 ### Changed (BREAKING)
 - Command-line user properties are now required to use the `sbomAggregator.*` prefix. Bare `-D` property names such as `-DspecVersion=...` or `-DprojectSbom=...` are no longer honoured by the plugin.
+  - **Migration:** prefix every command-line property, e.g. `-DspecVersion=1.6` becomes `-DsbomAggregator.specVersion=1.6` and `-DprojectSbom=...` becomes `-DsbomAggregator.projectSbom=...`. Values configured in the plugin's `<configuration>` block are unaffected.
 
 ### Added
 - New transitive-resolution options: `includeTransitive`, `includeScopes`, and `excludes`.
@@ -82,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   community files and a single deploy/release step) so they cannot silently
   regress.
 
+### Dependencies
+- Test dependencies: JUnit Jupiter 5.10.2 → 6.1.3, JaCoCo 0.8.12 → 0.8.16.
+- Build plugins: compiler 3.16.0, surefire 3.6.1, jar 3.5.1, source 3.4.0,
+  javadoc 3.12.0, invoker 3.10.1, gpg 3.2.8, enforcer 3.7.0,
+  plugin-tools 3.16.0 and central-publishing 0.12.0.
+- Maven Resolver stays on 1.9.27 and the Maven API on 3.9.6 so that the plugin
+  keeps matching the API that Maven 3.9 provides at runtime; Dependabot now
+  ignores resolver major updates and Maven API minor/major updates.
+
 ## [1.0.0] - 2026-10-14
 
 ### Added
@@ -141,4 +159,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Uses Eclipse Aether for artifact resolution
 - Powered by CycloneDX Core Java library for SBOM parsing and generation
 
+[Unreleased]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/releases/tag/v1.0.0

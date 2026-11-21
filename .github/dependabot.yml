@@ -10,6 +10,14 @@ updates:
     open-pull-requests-limit: 10
     commit-message:
       prefix: 'chore(deps)'
+    # The plugin compiles against the Maven 3.9 API (provided scope); Maven
+    # Resolver 2.x and newer Maven API lines would silently raise the minimum
+    # Maven version users need. Bump those deliberately, not via Dependabot.
+    ignore:
+      - dependency-name: 'org.apache.maven.resolver:*'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'org.apache.maven:*'
+        update-types: ['version-update:semver-minor', 'version-update:semver-major']
     groups:
       maven-plugins:
         patterns:

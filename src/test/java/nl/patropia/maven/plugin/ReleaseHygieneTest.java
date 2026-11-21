@@ -226,6 +226,82 @@ class ReleaseHygieneTest {
                 "SECURITY.md must explain how to report a vulnerability privately");
     }
 
+    @Test
+    void readmeUsageExamplesMatchThePomVersion() throws IOException {
+        String projectVersion = childText(pom.getDocumentElement(), "version");
+        String releaseVersion = projectVersion.replace("-SNAPSHOT", "");
+        String readme = read("README.md");
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "<artifactId>sbom-aggregator-maven-plugin</artifactId>\\s*<version>([^<]+)</version>").matcher(readme);
+        int found = 0;
+        while (m.find()) {
+            found++;
+            assertEquals(releaseVersion, m.group(1),
+                    "README.md plugin examples must reference the version being released");
+        }
+        assertTrue(found > 0, "README.md must contain at least one plugin usage example with a <version>");
+    }
+
+    @Test
+    void issueTemplateExamplesDoNotAdvertiseAStaleVersion() throws IOException {
+        String projectVersion = childText(pom.getDocumentElement(), "version");
+        String releaseVersion = projectVersion.replace("-SNAPSHOT", "");
+        for (String template : List.of(
+                ".github/ISSUE_TEMPLATE/bug_report.md",
+                ".github/ISSUE_TEMPLATE/feature_request.md")) {
+            Path path = projectDir.resolve(template);
+            if (!Files.isRegularFile(path)) {
+                continue;
+            }
+            String text = read(template);
+            List<String> advertised = new ArrayList<>();
+            // Plugin coordinates in an XML snippet, e.g. the <version> below our artifactId.
+            java.util.regex.Matcher coordinates = java.util.regex.Pattern.compile(
+                    "<artifactId>sbom-aggregator-maven-plugin</artifactId>\\s*<version>([^<]+)</version>")
+                    .matcher(text);
+            while (coordinates.find()) {
+                advertised.add(coordinates.group(1).trim());
+            }
+            // The free-text "Plugin Version" field of the report form.
+            java.util.regex.Matcher field = java.util.regex.Pattern.compile(
+                    "Plugin Version\\*\\*: \\[e\\.g\\., ([^\\]]+)]").matcher(text);
+            while (field.find()) {
+                advertised.add(field.group(1).trim());
+            }
+            // Java, Maven and OS examples in the same template are about other software, so they are not compared.
+            List<String> stale = advertised.stream().filter(v -> !v.equals(releaseVersion)).toList();
+            assertTrue(stale.isEmpty(), template + " advertises stale plugin versions " + stale
+                    + "; the plugin version being released is " + releaseVersion);
+        }
+    }
+
+    @Test
+    void changelogHasUnreleasedSectionAndLinkForEveryRelease() throws IOException {
+        String changelog = read("CHANGELOG.md");
+        assertTrue(changelog.contains("\n## [Unreleased]\n"), "CHANGELOG.md must keep an [Unreleased] section");
+        assertTrue(changelog.contains("\n[Unreleased]: "), "CHANGELOG.md must define the [Unreleased] link");
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?m)^## \\[(\\d+\\.\\d+\\.\\d+)]").matcher(changelog);
+        List<String> missing = new ArrayList<>();
+        int releases = 0;
+        while (m.find()) {
+            releases++;
+            if (!changelog.contains("\n[" + m.group(1) + "]: ")) {
+                missing.add(m.group(1));
+            }
+        }
+        assertTrue(releases > 0, "CHANGELOG.md must contain at least one released version");
+        assertTrue(missing.isEmpty(), "CHANGELOG.md is missing link references for " + missing);
+    }
+
+    @Test
+    void mavenResolverStaysOnTheMaven39Line() {
+        NodeList props = pom.getElementsByTagName("maven-resolver.version");
+        assertEquals(1, props.getLength(), "pom.xml must define maven-resolver.version");
+        String resolver = props.item(0).getTextContent().trim();
+        assertTrue(resolver.startsWith("1.9."),
+                "maven-resolver.version must match the Maven 3.9 runtime (1.9.x) but was " + resolver);
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private static String read(String relativePath) throws IOException {
