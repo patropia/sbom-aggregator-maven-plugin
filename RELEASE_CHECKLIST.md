@@ -50,6 +50,10 @@ Use this checklist when preparing a new release of the SBOM Aggregator Maven Plu
   git commit -m "chore: prepare for next development iteration"
   git push origin main
   ```
+- [ ] Branch hygiene: delete merged work branches (`swarmcommand/run-*`, `wip/*`)
+  and close Dependabot PRs that were folded into the release. For 1.1.0 this is
+  scripted in [`scripts/release-housekeeping.sh`](scripts/release-housekeeping.sh)
+  (run it with push rights and an authenticated `gh` CLI).
 - [ ] Announce release (optional):
   - Update project documentation
   - Notify stakeholders
