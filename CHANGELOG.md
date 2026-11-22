@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Build no longer fails after the post-release bump to the next `-SNAPSHOT`: the release-hygiene tests now accept
+  README and issue-template examples that reference the latest published release (from CHANGELOG.md) while on a
+  development snapshot. Release builds still require the examples to match the version being released.
+
 ## [1.1.0] - 2026-11-22
 
 > **Versioning note:** this release contains one breaking change (the

@@ -228,24 +228,22 @@ class ReleaseHygieneTest {
 
     @Test
     void readmeUsageExamplesMatchThePomVersion() throws IOException {
-        String projectVersion = childText(pom.getDocumentElement(), "version");
-        String releaseVersion = projectVersion.replace("-SNAPSHOT", "");
+        List<String> allowed = allowedDocumentedVersions();
         String readme = read("README.md");
         java.util.regex.Matcher m = java.util.regex.Pattern.compile(
                 "<artifactId>sbom-aggregator-maven-plugin</artifactId>\\s*<version>([^<]+)</version>").matcher(readme);
         int found = 0;
         while (m.find()) {
             found++;
-            assertEquals(releaseVersion, m.group(1),
-                    "README.md plugin examples must reference the version being released");
+            assertTrue(allowed.contains(m.group(1).trim()),
+                    "README.md plugin examples must reference one of " + allowed + " but found " + m.group(1));
         }
         assertTrue(found > 0, "README.md must contain at least one plugin usage example with a <version>");
     }
 
     @Test
     void issueTemplateExamplesDoNotAdvertiseAStaleVersion() throws IOException {
-        String projectVersion = childText(pom.getDocumentElement(), "version");
-        String releaseVersion = projectVersion.replace("-SNAPSHOT", "");
+        List<String> allowed = allowedDocumentedVersions();
         for (String template : List.of(
                 ".github/ISSUE_TEMPLATE/bug_report.md",
                 ".github/ISSUE_TEMPLATE/feature_request.md")) {
@@ -269,10 +267,31 @@ class ReleaseHygieneTest {
                 advertised.add(field.group(1).trim());
             }
             // Java, Maven and OS examples in the same template are about other software, so they are not compared.
-            List<String> stale = advertised.stream().filter(v -> !v.equals(releaseVersion)).toList();
+            List<String> stale = advertised.stream().filter(v -> !allowed.contains(v)).toList();
             assertTrue(stale.isEmpty(), template + " advertises stale plugin versions " + stale
-                    + "; the plugin version being released is " + releaseVersion);
+                    + "; allowed plugin versions are " + allowed);
         }
+    }
+
+    /**
+     * Plugin versions that user-facing examples may reference. A release build (no {@code -SNAPSHOT}) must document
+     * exactly the version being released. On a development {@code X.Y.Z-SNAPSHOT} the examples may still show the
+     * latest published release from CHANGELOG.md (so users are never pointed at an unpublished version right after
+     * the post-release version bump) or the upcoming {@code X.Y.Z}.
+     */
+    private static List<String> allowedDocumentedVersions() throws IOException {
+        String projectVersion = childText(pom.getDocumentElement(), "version");
+        String releaseVersion = projectVersion.replace("-SNAPSHOT", "");
+        List<String> allowed = new ArrayList<>();
+        allowed.add(releaseVersion);
+        if (projectVersion.endsWith("-SNAPSHOT")) {
+            java.util.regex.Matcher released = java.util.regex.Pattern.compile(
+                    "(?m)^## \\[(\\d+\\.\\d+\\.\\d+)]").matcher(read("CHANGELOG.md"));
+            if (released.find()) {
+                allowed.add(released.group(1));
+            }
+        }
+        return allowed;
     }
 
     @Test
@@ -364,6 +383,25 @@ class ReleaseHygieneTest {
             }
         }
         return null;
+    }
+
+    @Test
+    void documentedVersionAllowListIsNarrow() throws IOException {
+        // Guards the helper itself: it must fail closed. It may only accept the version being released and, on a
+        // -SNAPSHOT build, the newest release in CHANGELOG.md -- never an older release and never a -SNAPSHOT string.
+        String projectVersion = childText(pom.getDocumentElement(), "version");
+        List<String> allowed = allowedDocumentedVersions();
+        assertTrue(allowed.contains(projectVersion.replace("-SNAPSHOT", "")),
+                "allowed versions " + allowed + " must contain the version being released");
+        for (String version : allowed) {
+            assertEquals(version.replace("-SNAPSHOT", ""), version,
+                    "documented versions must never be snapshots: " + allowed);
+        }
+        assertTrue(!allowed.contains("1.0.0"),
+                "an older release must not be accepted as documentation target: " + allowed);
+        if (!projectVersion.endsWith("-SNAPSHOT")) {
+            assertEquals(1, allowed.size(), "a release build must document exactly " + projectVersion);
+        }
     }
 
     @Test
