@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-11-20
+## [1.1.0] - 2026-11-22
 
 > **Versioning note:** this release contains one breaking change (the
 > `sbomAggregator.*` property prefix below) but is deliberately published as a
