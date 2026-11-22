@@ -10,13 +10,13 @@ Use this checklist when preparing a new release of the SBOM Aggregator Maven Plu
 - [ ] All changes are committed and pushed to `main` branch
 - [ ] No uncommitted changes in working directory
 - [ ] CHANGELOG.md is updated with release notes for the new version
-- [ ] Version in `pom.xml` is updated (remove `-SNAPSHOT` suffix)
+- [ ] Version in `pom.xml` (the release workflow sets it from the tag, so a manual edit is optional)
 - [ ] README.md examples reference the correct version
 - [ ] All documentation is up to date
 
 ## Release Preparation
 
-- [ ] Update version in `pom.xml`: Change `X.Y.Z-SNAPSHOT` to `X.Y.Z`
+- [ ] Optional: the release workflow sets the version from the tag (`versions:set`), so editing `pom.xml` by hand is not required
 - [ ] Update CHANGELOG.md: Replace `[Unreleased]` section date with actual release date
 - [ ] Commit version changes:
   ```bash
@@ -80,7 +80,7 @@ After release, verify the following:
 **Solutions**:
 - Check GitHub Actions logs for specific error messages
 - Verify GPG credentials in GitHub Secrets:
-  - `GPG_PRIVATE_KEY`: Base64-encoded private key
+  - `GPG_PRIVATE_KEY`: ASCII-armored private key (gpg --armor --export-secret-keys)
   - `GPG_PASSPHRASE`: Passphrase for the private key
 - Verify Central Portal token credentials in GitHub Secrets:
   - `CENTRAL_TOKEN_USERNAME`: Central Portal user token username
