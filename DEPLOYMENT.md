@@ -23,7 +23,7 @@ This guide explains how to deploy the SBOM Aggregator Maven Plugin to Maven Cent
    gpg --keyserver keyserver.ubuntu.com --send-keys YOUR_KEY_ID
    
    # Export private key for GitHub Actions
-   gpg --export-secret-keys YOUR_KEY_ID | base64
+   gpg --armor --export-secret-keys YOUR_KEY_ID
    ```
 
 3. **GitHub Secrets**
@@ -32,7 +32,7 @@ This guide explains how to deploy the SBOM Aggregator Maven Plugin to Maven Cent
    
    - `CENTRAL_TOKEN_USERNAME`: Central Portal user token username
    - `CENTRAL_TOKEN_PASSWORD`: Central Portal user token password
-   - `GPG_PRIVATE_KEY`: Base64-encoded GPG private key
+   - `GPG_PRIVATE_KEY`: ASCII-armored GPG private key
    - `GPG_PASSPHRASE`: Passphrase for your GPG key
 
 ## Release Process
