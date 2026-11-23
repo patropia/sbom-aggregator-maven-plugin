@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-23
+
 ### Added
 - New `diff-sboms` goal (default phase `verify`): compares a baseline SBOM with the current (aggregated) SBOM and
   writes deterministic `sbom-diff.json` / `sbom-diff.md` reports of added, removed, upgraded/downgraded components
@@ -207,7 +209,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Uses Eclipse Aether for artifact resolution
 - Powered by CycloneDX Core Java library for SBOM parsing and generation
 
-[Unreleased]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/releases/tag/v1.0.0
