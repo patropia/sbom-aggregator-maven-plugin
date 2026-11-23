@@ -1,0 +1,36 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "group": "nl.patropia.maven.it",
+      "name": "spdx-output-test",
+      "version": "1.0.0-SNAPSHOT",
+      "bom-ref": "pkg:maven/nl.patropia.maven.it/spdx-output-test@1.0.0-SNAPSHOT",
+      "purl": "pkg:maven/nl.patropia.maven.it/spdx-output-test@1.0.0-SNAPSHOT"
+    },
+    "supplier": {
+      "name": "Patropia"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "group": "nl.patropia.maven.it",
+      "name": "reproducible-component",
+      "version": "1.0.0",
+      "bom-ref": "pkg:maven/nl.patropia.maven.it/reproducible-component@1.0.0",
+      "purl": "pkg:maven/nl.patropia.maven.it/reproducible-component@1.0.0"
+    },
+    {
+      "type": "library",
+      "group": "nl.patropia.maven.it",
+      "name": "another-component",
+      "version": "2.0.0",
+      "bom-ref": "pkg:maven/nl.patropia.maven.it/another-component@2.0.0",
+      "purl": "pkg:maven/nl.patropia.maven.it/another-component@2.0.0"
+    }
+  ]
+}
