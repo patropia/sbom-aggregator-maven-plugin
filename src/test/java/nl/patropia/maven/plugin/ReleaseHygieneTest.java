@@ -34,6 +34,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -97,7 +101,7 @@ class ReleaseHygieneTest {
     void obsoleteAetherCoordinatesAreNotUsed() {
         List<String> offending = dependencyScopes().keySet().stream()
                 .filter(OBSOLETE_DEPENDENCIES::contains)
-                .toList();
+                .collect(Collectors.toList());
         assertTrue(offending.isEmpty(),
                 "Obsolete dependencies found: " + offending
                         + " (use org.apache.maven.resolver:maven-resolver-api instead of aether-api)");
@@ -156,17 +160,149 @@ class ReleaseHygieneTest {
     }
 
     @Test
-    void ciWorkflowRunsTheBuildOnJava17And21() throws IOException {
+    void ciWorkflowRunsTheBuildOnJava11And17And21() throws IOException {
         String ci = read(".github/workflows/ci.yml");
         assertAll(
-                () -> assertTrue(ci.contains("java: [ '17', '21' ]"),
-                        "ci.yml must build on Java 17 and 21: " + firstLines(ci)),
+                () -> assertTrue(ci.contains("java: [ '11', '17', '21' ]"),
+                        "ci.yml must build on Java 11 (the minimum), 17 and 21: " + firstLines(ci)),
                 () -> assertTrue(ci.contains("-Prun-its"),
                         "ci.yml must run the integration tests (mvn clean verify -Prun-its)"),
                 () -> assertTrue(ci.contains("actions/setup-java"),
                         "ci.yml must set up a JDK"),
                 () -> assertTrue(ci.contains("actions/upload-artifact"),
                         "ci.yml should publish test/coverage artifacts"));
+    }
+
+    @Test
+    void javaBaselineStaysAtJava11() throws IOException {
+        String rootPom = read("pom.xml");
+        assertAll(
+                () -> assertTrue(rootPom.contains("<maven.compiler.release>11</maven.compiler.release>"),
+                        "pom.xml must compile with maven.compiler.release 11 (Java 11 is the supported minimum)"),
+                () -> assertTrue(rootPom.matches("(?s).*<requireJavaVersion>\\s*<version>\\[11,\\)</version>.*"),
+                        "the enforcer requireJavaVersion rule must be [11,)"),
+                // A hard-coded source/target in maven-compiler-plugin would shadow maven.compiler.release and could
+                // silently raise the bytecode level again.
+                () -> assertFalse(rootPom.matches("(?s).*<source>\\s*1[2-9].*"),
+                        "pom.xml must not hard-code <source> above 11; maven.compiler.release governs the level"),
+                () -> assertFalse(rootPom.matches("(?s).*<target>\\s*1[2-9].*"),
+                        "pom.xml must not hard-code <target> above 11; maven.compiler.release governs the level"));
+
+        List<Path> itPoms;
+        try (Stream<Path> dirs = Files.list(projectDir.resolve("src/it"))) {
+            itPoms = dirs.map(dir -> dir.resolve("pom.xml"))
+                    .filter(Files::isRegularFile)
+                    .collect(Collectors.toList());
+        }
+        assertFalse(itPoms.isEmpty(), "expected integration test poms under src/it");
+        for (Path itPom : itPoms) {
+            String content = Files.readString(itPom, StandardCharsets.UTF_8);
+            assertFalse(content.matches("(?s).*<maven\\.compiler\\.[a-z]+>(1[2-9]|[2-9][0-9])</maven\\.compiler.*"),
+                    projectDir.relativize(itPom) + " must not raise maven.compiler.* above the Java 11 baseline");
+        }
+    }
+
+    @Test
+    void junitStaysOnTheJava11CompatibleLine() throws IOException {
+        // JUnit 6 is built for Java 17, so bumping it back breaks both the build and the test run on Java 11.
+        String version = childText(findDependency("org.junit.jupiter", "junit-jupiter"), "version");
+        String dependabot = read(".github/dependabot.yml");
+        assertAll(
+                () -> assertTrue(version != null && version.startsWith("5."),
+                        "junit-jupiter must stay on 5.x while Java 11 is supported (JUnit 6 needs Java 17) but was "
+                                + version),
+                () -> assertTrue(dependabot.contains("'org.junit*:*'"),
+                        "dependabot.yml must ignore major JUnit updates, otherwise JUnit 6 is proposed again"));
+    }
+
+    @Test
+    void javaSourcesKeepToJava11Syntax() throws IOException {
+        // CI compiles on JDK 11, but a contributor building on JDK 17/21 would only notice a text block, a record or
+        // Stream.toList() when CI fails. Detect the common Java 12+ constructs here, on whatever JDK runs the tests.
+        String textBlockStart = "\"" + "\"" + "\"";
+        // Stream.toList() needs Java 16; Collectors.toList() is the Java 11 form and must stay allowed. The receiver
+        // is inspected separately (see hasStreamToList) so a call wrapped after the receiver is still classified
+        // correctly.
+        Pattern recordDeclaration =
+                Pattern.compile("(?s)^\\s*(public |final |static )*record\\s+\\w+\\s*\\(");
+
+        List<Path> sources = javaSources();
+        assertFalse(sources.isEmpty(), "expected Java sources under src/main/java and src/test/java");
+
+        List<String> offending = new ArrayList<>();
+        for (Path source : sources) {
+            String[] lines = read(source).split("\n", -1);
+            String previousCode = "";
+            for (int i = 0; i < lines.length; i++) {
+                String line = lines[i].trim();
+                if (line.isEmpty()) {
+                    continue;
+                }
+                if (line.startsWith("//") || line.startsWith("*") || line.startsWith("/*")) {
+                    continue; // comments and javadoc may name newer syntax without using it
+                }
+                // Scanning the preceding code line as well catches a call that is wrapped before ".toList()",
+                // e.g. "Collectors" on one line and ".toList()" on the next, which is valid Java 11 code. Comment
+                // lines never take part, so prose about the newer syntax cannot trigger the check.
+                String window = previousCode.isEmpty() ? line : previousCode + " " + line;
+                if (line.contains(textBlockStart) || hasStreamToList(window)
+                        || recordDeclaration.matcher(lines[i]).find()) {
+                    offending.add(projectDir.relativize(source) + ":" + (i + 1) + ": " + line);
+                }
+                previousCode = line;
+            }
+        }
+        assertTrue(offending.isEmpty(),
+                "sources must compile with maven.compiler.release 11; move JSON text blocks to src/test/resources and "
+                        + "use Collectors.toList() instead of Stream." + "toList(): " + offending);
+    }
+
+    @Test
+    void streamToListDetectionAcceptsTheCollectorsForm() {
+        // Guards the detector itself: it must stay quiet for the Java 11 spelling, also when the call is wrapped,
+        // and must keep flagging the Java 16 form.
+        String streamToListCall = "." + "toList()";
+        String wrappedStreamToListCall = "\n                ." + "toList()";
+        String wrappedCollectorsCall = "\n                ." + "toList())";
+        assertAll(
+                () -> assertFalse(hasStreamToList("names.stream().collect(Collectors." + "toList());"),
+                        "Collectors." + "toList() is the Java 11 form and must stay allowed"),
+                () -> assertFalse(hasStreamToList("names.stream().collect(java.util.stream.Collectors." + "toList());"),
+                        "a fully qualified Collectors." + "toList() must stay allowed"),
+                () -> assertFalse(hasStreamToList("names.stream().collect(Collectors" + wrappedCollectorsCall + ";"),
+                        "Collectors." + "toList() wrapped after the receiver must not be reported as a stream call"),
+                () -> assertTrue(hasStreamToList("return names.stream()" + streamToListCall + ";"),
+                        "Stream." + "toList() must still be reported"),
+                () -> assertTrue(hasStreamToList("return names.stream()" + wrappedStreamToListCall + ";"),
+                        "Stream." + "toList() wrapped onto the next line must still be reported"));
+    }
+
+    @Test
+    void pluginDescriptorDeclaresJava11Runtime() throws IOException {
+        // Users running the published plugin see plugin.xml, so the declared runtime must match the Java 11 baseline.
+        Path descriptor = projectDir.resolve("target/classes/META-INF/maven/plugin.xml");
+        assertTrue(Files.isRegularFile(descriptor),
+                "expected the generated plugin descriptor at target/classes/META-INF/maven/plugin.xml; it is written "
+                        + "by maven-plugin-plugin before the tests run");
+        String content = Files.readString(descriptor, StandardCharsets.UTF_8).replace("\r\n", "\n");
+        assertTrue(content.contains("<requiredJavaVersion>11</requiredJavaVersion>"),
+                "the plugin descriptor must require Java 11 (the supported minimum) but declares "
+                        + firstMatch(content, "<requiredJavaVersion>(.*?)</requiredJavaVersion>"));
+    }
+
+    @Test
+    void docsStateTheJava11Baseline() throws IOException {
+        String readme = read("README.md");
+        String contributing = read("CONTRIBUTING.md");
+        assertAll(
+                () -> assertTrue(readme.contains("Java:** 11 or higher"),
+                        "README.md must list 'Java: 11 or higher' as a prerequisite"),
+                () -> assertTrue(contributing.contains("Java 11 or higher"),
+                        "CONTRIBUTING.md must state that Java 11 or higher is required"),
+                () -> assertFalse(readme.contains("Java:** 17 or higher"),
+                        "README.md must not still advertise Java 17 as the minimum"),
+                () -> assertFalse(contributing.contains("Java 17 or higher"),
+                        "CONTRIBUTING.md must not still advertise Java 17 as the minimum"));
     }
 
     @Test
@@ -230,7 +366,7 @@ class ReleaseHygieneTest {
     void readmeUsageExamplesMatchThePomVersion() throws IOException {
         List<String> allowed = allowedDocumentedVersions();
         String readme = read("README.md");
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+        Matcher m = Pattern.compile(
                 "<artifactId>sbom-aggregator-maven-plugin</artifactId>\\s*<version>([^<]+)</version>").matcher(readme);
         int found = 0;
         while (m.find()) {
@@ -254,20 +390,20 @@ class ReleaseHygieneTest {
             String text = read(template);
             List<String> advertised = new ArrayList<>();
             // Plugin coordinates in an XML snippet, e.g. the <version> below our artifactId.
-            java.util.regex.Matcher coordinates = java.util.regex.Pattern.compile(
+            Matcher coordinates = Pattern.compile(
                     "<artifactId>sbom-aggregator-maven-plugin</artifactId>\\s*<version>([^<]+)</version>")
                     .matcher(text);
             while (coordinates.find()) {
                 advertised.add(coordinates.group(1).trim());
             }
             // The free-text "Plugin Version" field of the report form.
-            java.util.regex.Matcher field = java.util.regex.Pattern.compile(
+            Matcher field = Pattern.compile(
                     "Plugin Version\\*\\*: \\[e\\.g\\., ([^\\]]+)]").matcher(text);
             while (field.find()) {
                 advertised.add(field.group(1).trim());
             }
             // Java, Maven and OS examples in the same template are about other software, so they are not compared.
-            List<String> stale = advertised.stream().filter(v -> !allowed.contains(v)).toList();
+            List<String> stale = advertised.stream().filter(v -> !allowed.contains(v)).collect(Collectors.toList());
             assertTrue(stale.isEmpty(), template + " advertises stale plugin versions " + stale
                     + "; allowed plugin versions are " + allowed);
         }
@@ -285,7 +421,7 @@ class ReleaseHygieneTest {
         List<String> allowed = new ArrayList<>();
         allowed.add(releaseVersion);
         if (projectVersion.endsWith("-SNAPSHOT")) {
-            java.util.regex.Matcher released = java.util.regex.Pattern.compile(
+            Matcher released = Pattern.compile(
                     "(?m)^## \\[(\\d+\\.\\d+\\.\\d+)]").matcher(read("CHANGELOG.md"));
             if (released.find()) {
                 allowed.add(released.group(1));
@@ -299,7 +435,7 @@ class ReleaseHygieneTest {
         String changelog = read("CHANGELOG.md");
         assertTrue(changelog.contains("\n## [Unreleased]\n"), "CHANGELOG.md must keep an [Unreleased] section");
         assertTrue(changelog.contains("\n[Unreleased]: "), "CHANGELOG.md must define the [Unreleased] link");
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?m)^## \\[(\\d+\\.\\d+\\.\\d+)]").matcher(changelog);
+        Matcher m = Pattern.compile("(?m)^## \\[(\\d+\\.\\d+\\.\\d+)]").matcher(changelog);
         List<String> missing = new ArrayList<>();
         int releases = 0;
         while (m.find()) {
@@ -326,7 +462,52 @@ class ReleaseHygieneTest {
     private static String read(String relativePath) throws IOException {
         Path path = projectDir.resolve(relativePath);
         assertTrue(Files.isRegularFile(path), relativePath + " is missing from the project");
+        return read(path);
+    }
+
+    private static String read(Path path) throws IOException {
         return Files.readString(path, StandardCharsets.UTF_8).replace("\r\n", "\n");
+    }
+
+    /** All Java sources of the project, main and test. */
+    private static List<Path> javaSources() throws IOException {
+        List<Path> sources = new ArrayList<>();
+        for (String root : List.of("src/main/java", "src/test/java")) {
+            Path dir = projectDir.resolve(root);
+            if (!Files.isDirectory(dir)) {
+                continue;
+            }
+            try (Stream<Path> files = Files.walk(dir)) {
+                files.filter(file -> file.toString().endsWith(".java")).forEach(sources::add);
+            }
+        }
+        return sources;
+    }
+
+    /**
+     * True when {@code text} contains a {@code .toList()} call whose receiver is not {@code Collectors}.
+     * <p>
+     * {@code Collectors.toList()} is the Java 11 spelling and stays allowed; {@code stream.toList()} needs Java 16.
+     * The receiver is looked up separately from the call so whitespace (a line break between the receiver and the
+     * call) does not change the verdict. A Java look-behind cannot express that because it must be fixed width.
+     * </p>
+     */
+    private static boolean hasStreamToList(String text) {
+        Matcher matcher = Pattern.compile("\\.\\s*" + "toList\\s*\\(\\s*\\)")
+                .matcher(text);
+        while (matcher.find()) {
+            if (!text.substring(0, matcher.start()).stripTrailing().endsWith("Collectors")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** First capture of {@code regex} in {@code text}, or the text itself when it does not match. */
+    private static String firstMatch(String text, String regex) {
+        Matcher matcher = Pattern.compile(regex, Pattern.DOTALL)
+                .matcher(text);
+        return matcher.find() ? matcher.group(1).trim() : "nothing";
     }
 
     /** Counts non-overlapping occurrences of {@code needle} in {@code haystack}. */

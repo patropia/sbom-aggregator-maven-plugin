@@ -22,6 +22,7 @@ jobs:
         with:
           fetch-depth: 0
       
+      # Built on JDK 17; maven.compiler.release=11 in pom.xml still produces Java 11 bytecode (minimum runtime is Java 11).
       - name: Set up JDK 17
         uses: actions/setup-java@v6
         with:

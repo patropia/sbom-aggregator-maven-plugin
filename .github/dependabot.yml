@@ -18,6 +18,9 @@ updates:
         update-types: ['version-update:semver-major']
       - dependency-name: 'org.apache.maven:*'
         update-types: ['version-update:semver-minor', 'version-update:semver-major']
+      # JUnit 6 requires Java 17; the build and tests must keep running on Java 11.
+      - dependency-name: 'org.junit*:*'
+        update-types: ['version-update:semver-major']
     groups:
       maven-plugins:
         patterns:

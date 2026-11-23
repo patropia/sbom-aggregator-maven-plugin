@@ -1,0 +1,29 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "library",
+      "bom-ref": "comp-1",
+      "group": "com.acme",
+      "name": "lib-x",
+      "version": "1.0.0",
+      "purl": "pkg:maven/com.acme/lib-x@1.0.0",
+      "components": [
+        {
+          "type": "library",
+          "bom-ref": "nested-1",
+          "group": "com.acme",
+          "name": "nested-child",
+          "version": "1.0.0",
+          "purl": "pkg:maven/com.acme/nested-child@1.0.0"
+        }
+      ]
+    }
+  },
+  "dependencies": [
+    { "ref": "comp-1", "dependsOn": [ "nested-1" ] },
+    { "ref": "nested-1" }
+  ]
+}

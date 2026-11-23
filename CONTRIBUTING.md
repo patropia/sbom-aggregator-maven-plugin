@@ -41,7 +41,7 @@ Feature suggestions are welcome! Please create an issue with:
 
 ### Prerequisites
 
-- Java 17 or higher
+- Java 11 or higher (CI builds and tests on JDK 11, 17 and 21)
 - Maven 3.9.x or higher
 - Git
 
