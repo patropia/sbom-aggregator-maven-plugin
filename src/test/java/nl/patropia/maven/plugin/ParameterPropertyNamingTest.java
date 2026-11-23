@@ -63,6 +63,7 @@ class ParameterPropertyNamingTest {
             "dependencyClassifiers",
             "dependencyExtensions",
             "includeTransitive",
+            "includeVulnerabilities",
             "includeScopes",
             "excludes",
             "failOnMissingSbom",

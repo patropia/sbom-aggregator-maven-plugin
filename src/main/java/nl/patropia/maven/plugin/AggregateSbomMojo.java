@@ -111,6 +111,14 @@ public class AggregateSbomMojo extends AbstractMojo {
     boolean includeTransitive;
 
     /**
+     * Merge the {@code vulnerabilities} sections of the input SBOMs into the aggregated BOM (spec 1.4+).
+     * Duplicates (same id and source) are merged and {@code affects} references are rewritten to the
+     * final component bom-refs. Defaults to true.
+     */
+    @Parameter(property = "sbomAggregator.includeVulnerabilities", defaultValue = "true")
+    boolean includeVulnerabilities = true;
+
+    /**
      * Scopes to include when collecting dependencies. Null or empty -> ["compile","runtime"].
      */
     @Parameter(property = "sbomAggregator.includeScopes")
@@ -341,7 +349,8 @@ public class AggregateSbomMojo extends AbstractMojo {
                 specVersion,
                 boms,
                 missingSboms,
-                parseOutputTimestamp(outputTimestamp));
+                parseOutputTimestamp(outputTimestamp),
+                includeVulnerabilities);
 
         // 4. Serialize and output merged BOM
         File outputFile = new File(outputDirectory, outputName + "." + outputExtension());
@@ -566,7 +575,8 @@ public class AggregateSbomMojo extends AbstractMojo {
                 specVersion,
                 parsedBoms == null ? Collections.emptyList() : parsedBoms,
                 missing,
-                null);
+                null,
+                includeVulnerabilities);
     }
 
     /**

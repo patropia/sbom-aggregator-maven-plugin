@@ -22,6 +22,7 @@ import org.cyclonedx.model.Composition;
 import org.cyclonedx.model.Dependency;
 import org.cyclonedx.model.Property;
 import org.cyclonedx.model.Service;
+import org.cyclonedx.model.vulnerability.Vulnerability;
 import org.cyclonedx.parsers.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -757,5 +758,231 @@ class SbomMergerTest {
         assertTrue(properties.stream().anyMatch(p -> SbomMerger.PROPERTY_MISSING_SBOM.equals(p.getName())
                         && "true".equals(p.getValue())),
                 "placeholder must carry " + SbomMerger.PROPERTY_MISSING_SBOM + "=true");
+    }
+
+    // ------------------------------------------------------------------ vulnerabilities
+
+    private static String vulnBom(String metaName, String compRef, String compName, String compVersion,
+                                  String vulnsJson) {
+        return "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"version\":1,"
+                + "\"metadata\":{\"component\":{\"type\":\"library\",\"bom-ref\":\"pkg:maven/com.up/" + metaName
+                + "@1.0\",\"group\":\"com.up\",\"name\":\"" + metaName + "\",\"version\":\"1.0\","
+                + "\"purl\":\"pkg:maven/com.up/" + metaName + "@1.0\"}},"
+                + "\"components\":[{\"type\":\"library\",\"bom-ref\":\"" + compRef + "\",\"group\":\"com.lib\","
+                + "\"name\":\"" + compName + "\",\"version\":\"" + compVersion + "\",\"purl\":\"pkg:maven/com.lib/"
+                + compName + "@" + compVersion + "\"}],"
+                + "\"vulnerabilities\":" + vulnsJson + "}";
+    }
+
+    private static String vuln(String id, String source, String... refs) {
+        StringBuilder affects = new StringBuilder();
+        for (String ref : refs) {
+            if (affects.length() > 0) {
+                affects.append(',');
+            }
+            affects.append("{\"ref\":\"").append(ref).append("\"}");
+        }
+        return "{\"id\":\"" + id + "\",\"source\":{\"name\":\"" + source + "\"},\"affects\":[" + affects + "]}";
+    }
+
+    private static Set<String> componentRefs(Bom bom) {
+        return bom.getComponents().stream().map(Component::getBomRef).collect(Collectors.toSet());
+    }
+
+    private static Vulnerability vulnById(Bom bom, String id) {
+        return bom.getVulnerabilities().stream().filter(v -> id.equals(v.getId())).findFirst().orElse(null);
+    }
+
+    private static List<String> affectRefs(Vulnerability vulnerability) {
+        return vulnerability.getAffects().stream().map(Vulnerability.Affect::getRef).collect(Collectors.toList());
+    }
+
+    @Test
+    void mergesDuplicateVulnerabilitiesAndUnionsAffects(@TempDir Path tempDir) throws Exception {
+        Bom a = parseBom(tempDir, "a.json", vulnBom("a", "lib-x", "x", "1.0",
+                "[" + vuln("CVE-2024-0001", "NVD", "lib-x") + "]"));
+        Bom b = parseBom(tempDir, "b.json", vulnBom("b", "lib-y", "y", "2.0",
+                "[" + vuln("CVE-2024-0001", "NVD", "lib-y") + "," + vuln("CVE-2024-0001", "GHSA", "lib-y") + "]"));
+
+        Bom merged = merge(List.of(a, b), List.of());
+
+        assertEquals(2, merged.getVulnerabilities().size(), "same id+source merged once, other source kept");
+        Vulnerability nvd = merged.getVulnerabilities().stream()
+                .filter(v -> "NVD".equals(v.getSource().getName())).findFirst().orElseThrow();
+        assertEquals(List.of("lib-x", "lib-y"), affectRefs(nvd));
+    }
+
+    @Test
+    void rewritesAffectsRefAfterBomRefCollision(@TempDir Path tempDir) throws Exception {
+        // both SBOMs use the bom-ref "comp-1" for different components; the second one gets renamed
+        Bom a = parseBom(tempDir, "a.json", vulnBom("a", "comp-1", "x", "1.0", "[]"));
+        Bom b = parseBom(tempDir, "b.json", vulnBom("b", "comp-1", "y", "2.0",
+                "[" + vuln("CVE-2024-0002", "NVD", "comp-1") + "]"));
+
+        Bom merged = merge(List.of(a, b), List.of());
+
+        String renamed = componentByName(merged, "y").getBomRef();
+        assertNotEquals("comp-1", renamed, "second component must have been renamed");
+        assertEquals(List.of(renamed), affectRefs(vulnById(merged, "CVE-2024-0002")));
+    }
+
+    @Test
+    void dropsDanglingAffectsRefsAndEmptyVulnerabilities(@TempDir Path tempDir) throws Exception {
+        Bom a = parseBom(tempDir, "a.json", vulnBom("a", "lib-x", "x", "1.0",
+                "[" + vuln("CVE-2024-0003", "NVD", "lib-x", "does-not-exist") + ","
+                        + vuln("CVE-2024-0004", "NVD", "nowhere") + "]"));
+
+        Bom merged = merge(List.of(a), List.of());
+
+        assertEquals(1, merged.getVulnerabilities().size());
+        assertEquals(List.of("lib-x"), affectRefs(vulnById(merged, "CVE-2024-0003")));
+        assertTrue(componentRefs(merged).containsAll(affectRefs(vulnById(merged, "CVE-2024-0003"))));
+    }
+
+    @Test
+    void emitsNoVulnerabilitiesForSpec13(@TempDir Path tempDir) throws Exception {
+        Bom a = parseBom(tempDir, "a.json", vulnBom("a", "lib-x", "x", "1.0",
+                "[" + vuln("CVE-2024-0005", "NVD", "lib-x") + "]"));
+
+        Bom merged = merge(List.of(a), List.of(), "1.3", null);
+
+        assertNull(merged.getVulnerabilities());
+    }
+
+    @Test
+    void emitsNoVulnerabilitiesWhenDisabled(@TempDir Path tempDir) throws Exception {
+        Bom a = parseBom(tempDir, "a.json", vulnBom("a", "lib-x", "x", "1.0",
+                "[" + vuln("CVE-2024-0006", "NVD", "lib-x") + "]"));
+
+        Bom merged = SbomMerger.merge(ROOT_GROUP, ROOT_ARTIFACT, ROOT_VERSION, "1.6", List.of(a), List.of(),
+                null, false);
+
+        assertNull(merged.getVulnerabilities());
+    }
+
+    @Test
+    void vulnerabilityOrderIsDeterministic(@TempDir Path tempDir) throws Exception {
+        String vulns = "[" + vuln("CVE-2024-0009", "NVD", "lib-x") + "," + vuln("CVE-2024-0001", "OSV", "lib-x")
+                + "," + vuln("CVE-2024-0001", "GHSA", "lib-x") + "]";
+        Bom a = parseBom(tempDir, "a.json", vulnBom("a", "lib-x", "x", "1.0", vulns));
+        Bom b = parseBom(tempDir, "b.json", vulnBom("b", "lib-y", "y", "2.0",
+                "[" + vuln("CVE-2024-0009", "NVD", "lib-y") + "]"));
+
+        Bom merged = merge(List.of(b, a), List.of());
+
+        List<String> order = merged.getVulnerabilities().stream()
+                .map(v -> v.getId() + "/" + v.getSource().getName()).collect(Collectors.toList());
+        assertEquals(List.of("CVE-2024-0001/GHSA", "CVE-2024-0001/OSV", "CVE-2024-0009/NVD"), order);
+        assertEquals(List.of("lib-x", "lib-y"), affectRefs(vulnById(merged, "CVE-2024-0009")));
+    }
+
+    /** Builds a vulnerability JSON object with an optional bom-ref and optional version ranges. */
+    private static String vulnWithVersions(String bomRef, String id, String source, String ref, String versionsJson) {
+        return "{"
+                + (bomRef == null ? "" : "\"bom-ref\":\"" + bomRef + "\",")
+                + "\"id\":\"" + id + "\",\"source\":{\"name\":\"" + source + "\"},"
+                + "\"affects\":[{\"ref\":\"" + ref + "\""
+                + (versionsJson == null ? "" : ",\"versions\":" + versionsJson)
+                + "}]}";
+    }
+
+    private static List<String> versionKeys(Vulnerability.Affect affect) {
+        return affect.getVersions().stream()
+                .map(v -> v.getVersion() + "|" + v.getRange() + "|" + v.getStatus())
+                .collect(Collectors.toList());
+    }
+
+    @Test
+    void mergesRepeatedVersionRangesWithoutRepetition(@TempDir Path tempDir) throws Exception {
+        // The CycloneDX Vulnerability.Version model has no equals(), so ranges from different SBOMs used to be
+        // added twice. Identical ranges must collapse, distinct ones must survive.
+        String nvdRanges = "[{\"version\":\"1.0.0\",\"status\":\"affected\"},"
+                + "{\"range\":\"vers:generic/>=1.0.0|<2.0.0\",\"status\":\"affected\"}]";
+        String osvRanges = "[{\"version\":\"1.0.0\",\"status\":\"affected\"},"
+                + "{\"range\":\"vers:generic/>=1.0.0|<2.0.0\",\"status\":\"affected\"},"
+                + "{\"version\":\"1.0.0\",\"status\":\"unaffected\"}]";
+        Bom a = parseBom(tempDir, "a.json", vulnBom("a", "lib-x", "x", "1.0",
+                "[" + vulnWithVersions(null, "CVE-2024-0010", "NVD", "lib-x", nvdRanges) + "]"));
+        Bom b = parseBom(tempDir, "b.json", vulnBom("b", "lib-x", "x", "1.0",
+                "[" + vulnWithVersions(null, "CVE-2024-0010", "NVD", "lib-x", osvRanges) + "]"));
+
+        Bom merged = merge(List.of(a, b), List.of());
+
+        assertEquals(1, merged.getVulnerabilities().size());
+        Vulnerability vulnerability = vulnById(merged, "CVE-2024-0010");
+        assertEquals(1, vulnerability.getAffects().size(), "both SBOMs describe the same merged component");
+        List<String> keys = versionKeys(vulnerability.getAffects().get(0));
+        assertEquals(3, keys.size(), "repeated ranges must be merged, distinct ones kept: " + keys);
+        assertEquals(3, new HashSet<>(keys).size(), "no repeated ranges in the output: " + keys);
+        assertTrue(vulnerability.getAffects().get(0).getVersions().stream()
+                .anyMatch(v -> v.getStatus() == Vulnerability.Version.Status.UNAFFECTED));
+    }
+
+    @Test
+    void keepsVulnerabilityBomRefsUnique(@TempDir Path tempDir) throws Exception {
+        // Different SBOMs may use the same bom-ref for different vulnerabilities, and a vulnerability bom-ref
+        // may clash with a component bom-ref. CycloneDX expects bom-refs to be unique per document.
+        Bom a = parseBom(tempDir, "a.json", vulnBom("a", "lib-x", "x", "1.0",
+                "[" + vulnWithVersions("vuln-1", "CVE-2024-0011", "NVD", "lib-x", null) + ","
+                        + vulnWithVersions("lib-x", "CVE-2024-0012", "NVD", "lib-x", null) + "]"));
+        Bom b = parseBom(tempDir, "b.json", vulnBom("b", "lib-y", "y", "2.0",
+                "[" + vulnWithVersions("vuln-1", "CVE-2024-0013", "NVD", "lib-y", null) + "]"));
+
+        Bom merged = merge(List.of(a, b), List.of());
+
+        assertEquals(3, merged.getVulnerabilities().size(), "three different ids must all be kept");
+        List<String> vulnRefs = merged.getVulnerabilities().stream()
+                .map(Vulnerability::getBomRef).collect(Collectors.toList());
+        assertEquals(3, new HashSet<>(vulnRefs).size(), "vulnerability bom-refs must be unique: " + vulnRefs);
+        assertTrue(Collections.disjoint(componentRefs(merged), new HashSet<>(vulnRefs)),
+                "vulnerability bom-refs must not shadow component bom-refs: " + vulnRefs);
+        assertTrue(vulnRefs.contains("vuln-1"), "the first user of a bom-ref keeps it");
+    }
+
+    @Test
+    void keepsVulnerabilityBomRefsDistinctFromServiceAndRootRefs(@TempDir Path tempDir) throws Exception {
+        // A vulnerability bom-ref must not shadow a service bom-ref or the bom-ref of the root component.
+        String rootRef = merge(List.of(), List.of()).getMetadata().getComponent().getBomRef();
+        assertNotNull(rootRef);
+        String json = vulnBom("a", "lib-x", "x", "1.0",
+                "[" + vulnWithVersions("svc-1", "CVE-2024-0021", "NVD", "lib-x", null) + ","
+                        + vulnWithVersions(rootRef, "CVE-2024-0022", "NVD", "lib-x", null) + "]")
+                .replace("\"vulnerabilities\":",
+                        "\"services\":[{\"bom-ref\":\"svc-1\",\"name\":\"api\",\"version\":\"1\"}],"
+                                + "\"vulnerabilities\":");
+        Bom a = parseBom(tempDir, "a.json", json);
+
+        Bom merged = merge(List.of(a), List.of());
+
+        assertNotNull(merged.getServices());
+        Set<String> taken = new HashSet<>(componentRefs(merged));
+        merged.getServices().forEach(s -> taken.add(s.getBomRef()));
+        taken.add(merged.getMetadata().getComponent().getBomRef());
+        assertTrue(taken.contains("svc-1"), "the service keeps its bom-ref");
+        List<String> vulnRefs = merged.getVulnerabilities().stream()
+                .map(Vulnerability::getBomRef).collect(Collectors.toList());
+        assertEquals(2, vulnRefs.size());
+        assertTrue(Collections.disjoint(taken, new HashSet<>(vulnRefs)),
+                "vulnerability bom-refs must not shadow service or root bom-refs: " + vulnRefs);
+    }
+
+    @Test
+    void mergesVulnerabilitiesOfDifferentComponentsThatShareABomRef(@TempDir Path tempDir) throws Exception {
+        // Two dependency SBOMs use the same bom-ref for different components; each vulnerability must follow its
+        // own component to the renamed bom-ref instead of being merged into a single affects entry.
+        Bom a = parseBom(tempDir, "a.json", vulnBom("a", "comp-1", "x", "1.0",
+                "[" + vuln("CVE-2024-0014", "NVD", "comp-1") + "]"));
+        Bom b = parseBom(tempDir, "b.json", vulnBom("b", "comp-1", "y", "2.0",
+                "[" + vuln("CVE-2024-0014", "NVD", "comp-1") + "]"));
+
+        Bom merged = merge(List.of(a, b), List.of());
+
+        Vulnerability vulnerability = vulnById(merged, "CVE-2024-0014");
+        String refX = componentByName(merged, "x").getBomRef();
+        String refY = componentByName(merged, "y").getBomRef();
+        assertNotEquals(refX, refY, "the clashing components must have distinct bom-refs");
+        assertEquals(2, vulnerability.getAffects().size(), "one affects entry per resolved component");
+        assertEquals(List.of(refX, refY).stream().sorted().collect(Collectors.toList()),
+                affectRefs(vulnerability), "each affects ref must follow its own component");
     }
 }
