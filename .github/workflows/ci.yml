@@ -21,9 +21,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 17 is the minimum supported runtime (enforced by maven-enforcer-plugin),
-        # 21 is the current LTS and guards against future breakage.
-        java: [ '17', '21' ]
+        # 11 is the minimum supported runtime (enforced by maven-enforcer-plugin and
+        # maven.compiler.release), 17 and 21 are LTS releases that guard against future breakage.
+        java: [ '11', '17', '21' ]
 
     steps:
       - name: Checkout code

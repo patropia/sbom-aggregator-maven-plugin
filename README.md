@@ -20,7 +20,7 @@ A Maven plugin designed for Software Composition Analysis (SCA) in large multi-r
 
 ## Prerequisites
 
-* **Java:** 17 or higher
+* **Java:** 11 or higher
 * **Maven:** 3.9.x or higher
 
 ---

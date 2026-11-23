@@ -1,0 +1,15 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "library",
+      "bom-ref": "u2",
+      "group": "com.upstream",
+      "name": "upstream-two",
+      "version": "2.0.0",
+      "purl": "pkg:maven/com.upstream/upstream-two@2.0.0"
+    }
+  }
+}
