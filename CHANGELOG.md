@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Output is sorted for reproducible builds. Disable with `includeVulnerabilities=false`
   (`-DsbomAggregator.includeVulnerabilities=false`).
 
+### Changed
+- Minimum Java version lowered from 17 to 11: the plugin is now compiled to Java 11 bytecode
+  (`maven.compiler.release=11`) and the enforcer rule requires Java `[11,)`.
+- CI now builds and tests on JDK 11, 17 and 21.
+- Test dependency moved from JUnit 6.1.3 back to JUnit 5.14.x, because JUnit 6 requires Java 17.
+
 ### Fixed
 - Build no longer fails after the post-release bump to the next `-SNAPSHOT`: the release-hygiene tests now accept
   README and issue-template examples that reference the latest published release (from CHANGELOG.md) while on a

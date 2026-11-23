@@ -27,6 +27,7 @@ import org.cyclonedx.parsers.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -66,6 +67,14 @@ class SbomMergerTest {
         Path file = dir.resolve(fileName);
         Files.writeString(file, json, StandardCharsets.UTF_8);
         return new JsonParser().parse(file.toFile());
+    }
+
+    /** Parses a JSON fixture from {@code src/test/resources/nl/patropia/maven/plugin/merger/}. */
+    private static Bom parseBomResource(Path dir, String fileName) throws Exception {
+        try (InputStream in = SbomMergerTest.class.getResourceAsStream("merger/" + fileName)) {
+            assertNotNull(in, "Missing test resource merger/" + fileName);
+            return parseBom(dir, fileName, new String(in.readAllBytes(), StandardCharsets.UTF_8));
+        }
     }
 
     private static Bom merge(List<Bom> boms, List<SbomMerger.MissingDependency> missing) {
@@ -161,58 +170,9 @@ class SbomMergerTest {
     void keepsComponentsThatReuseABomRefInDifferentBoms(@TempDir Path tempDir) throws Exception {
         // Two different upstream SBOMs both use the bom-ref "comp-1"; the second one also contains a
         // self-loop and a reference to a component that does not exist.
-        Bom libX = parseBom(tempDir, "lib-x.json", """
-                {
-                  "bomFormat": "CycloneDX",
-                  "specVersion": "1.5",
-                  "version": 1,
-                  "metadata": {
-                    "component": {
-                      "type": "library",
-                      "bom-ref": "comp-1",
-                      "group": "com.acme",
-                      "name": "lib-x",
-                      "version": "1.0.0",
-                      "purl": "pkg:maven/com.acme/lib-x@1.0.0",
-                      "components": [
-                        {
-                          "type": "library",
-                          "bom-ref": "nested-1",
-                          "group": "com.acme",
-                          "name": "nested-child",
-                          "version": "1.0.0",
-                          "purl": "pkg:maven/com.acme/nested-child@1.0.0"
-                        }
-                      ]
-                    }
-                  },
-                  "dependencies": [
-                    { "ref": "comp-1", "dependsOn": [ "nested-1" ] },
-                    { "ref": "nested-1" }
-                  ]
-                }
-                """);
+        Bom libX = parseBomResource(tempDir, "lib-x.json");
 
-        Bom libY = parseBom(tempDir, "lib-y.json", """
-                {
-                  "bomFormat": "CycloneDX",
-                  "specVersion": "1.5",
-                  "version": 1,
-                  "metadata": {
-                    "component": {
-                      "type": "library",
-                      "bom-ref": "comp-1",
-                      "group": "com.other",
-                      "name": "lib-y",
-                      "version": "2.0.0",
-                      "purl": "pkg:maven/com.other/lib-y@2.0.0"
-                    }
-                  },
-                  "dependencies": [
-                    { "ref": "comp-1", "dependsOn": [ "comp-1", "does-not-exist" ] }
-                  ]
-                }
-                """);
+        Bom libY = parseBomResource(tempDir, "lib-y.json");
 
         Bom merged = merge(Arrays.asList(libX, libY), null);
 
@@ -247,54 +207,9 @@ class SbomMergerTest {
 
     @Test
     void deDuplicatesByPurlAndByGav(@TempDir Path tempDir) throws Exception {
-        Bom first = parseBom(tempDir, "first.json", """
-                {
-                  "bomFormat": "CycloneDX",
-                  "specVersion": "1.5",
-                  "version": 1,
-                  "components": [
-                    {
-                      "type": "library",
-                      "bom-ref": "a1",
-                      "name": "lib-a",
-                      "version": "1.0.0",
-                      "purl": "pkg:maven/com.acme/lib-a@1.0.0"
-                    },
-                    {
-                      "type": "library",
-                      "bom-ref": "c1",
-                      "group": "com.acme",
-                      "name": "lib-c",
-                      "version": "1.0.0"
-                    }
-                  ]
-                }
-                """);
+        Bom first = parseBomResource(tempDir, "first.json");
 
-        Bom second = parseBom(tempDir, "second.json", """
-                {
-                  "bomFormat": "CycloneDX",
-                  "specVersion": "1.5",
-                  "version": 1,
-                  "components": [
-                    {
-                      "type": "library",
-                      "bom-ref": "a2",
-                      "group": "com.acme",
-                      "name": "lib-a",
-                      "version": "1.0.0",
-                      "purl": "pkg:maven/com.acme/lib-a@1.0.0"
-                    },
-                    {
-                      "type": "library",
-                      "bom-ref": "c2",
-                      "group": "com.acme",
-                      "name": "lib-c",
-                      "version": "1.0.0"
-                    }
-                  ]
-                }
-                """);
+        Bom second = parseBomResource(tempDir, "second.json");
 
         Bom merged = merge(Arrays.asList(first, second), null);
 
@@ -312,64 +227,10 @@ class SbomMergerTest {
     @Test
     void usesProjectSbomChildrenAsRootDependencies(@TempDir Path tempDir) throws Exception {
         // The project's own SBOM: metadata.component is the project itself, which depends on dep-1.
-        Bom ownBom = parseBom(tempDir, "own.json", """
-                {
-                  "bomFormat": "CycloneDX",
-                  "specVersion": "1.5",
-                  "version": 1,
-                  "metadata": {
-                    "component": {
-                      "type": "application",
-                      "bom-ref": "root-ref",
-                      "group": "com.acme",
-                      "name": "root",
-                      "version": "1.0.0",
-                      "purl": "pkg:maven/com.acme/root@1.0.0"
-                    }
-                  },
-                  "components": [
-                    {
-                      "type": "library",
-                      "bom-ref": "d1",
-                      "group": "com.acme",
-                      "name": "dep-1",
-                      "version": "1.0.0",
-                      "purl": "pkg:maven/com.acme/dep-1@1.0.0"
-                    },
-                    {
-                      "type": "library",
-                      "bom-ref": "d2",
-                      "group": "com.acme",
-                      "name": "dep-2",
-                      "version": "1.0.0",
-                      "purl": "pkg:maven/com.acme/dep-2@1.0.0"
-                    }
-                  ],
-                  "dependencies": [
-                    { "ref": "root-ref", "dependsOn": [ "d1" ] },
-                    { "ref": "d1" }
-                  ]
-                }
-                """);
+        Bom ownBom = parseBomResource(tempDir, "own.json");
 
         // An upstream SBOM whose metadata.component must NOT become a child of the root.
-        Bom upstream = parseBom(tempDir, "upstream.json", """
-                {
-                  "bomFormat": "CycloneDX",
-                  "specVersion": "1.5",
-                  "version": 1,
-                  "metadata": {
-                    "component": {
-                      "type": "library",
-                      "bom-ref": "u1",
-                      "group": "com.upstream",
-                      "name": "upstream-lib",
-                      "version": "3.0.0",
-                      "purl": "pkg:maven/com.upstream/upstream-lib@3.0.0"
-                    }
-                  }
-                }
-                """);
+        Bom upstream = parseBomResource(tempDir, "upstream.json");
 
         Bom merged = merge(Arrays.asList(upstream, ownBom), null);
 
@@ -389,54 +250,9 @@ class SbomMergerTest {
 
     @Test
     void keepsUpstreamMetadataComponentsAndWiresThemToTheRoot(@TempDir Path tempDir) throws Exception {
-        Bom upstreamOne = parseBom(tempDir, "up-1.json", """
-                {
-                  "bomFormat": "CycloneDX",
-                  "specVersion": "1.5",
-                  "version": 1,
-                  "metadata": {
-                    "component": {
-                      "type": "library",
-                      "bom-ref": "u1",
-                      "group": "com.upstream",
-                      "name": "upstream-one",
-                      "version": "1.0.0",
-                      "purl": "pkg:maven/com.upstream/upstream-one@1.0.0"
-                    }
-                  },
-                  "components": [
-                    {
-                      "type": "library",
-                      "bom-ref": "t1",
-                      "group": "com.upstream",
-                      "name": "transitive-one",
-                      "version": "1.0.0",
-                      "purl": "pkg:maven/com.upstream/transitive-one@1.0.0"
-                    }
-                  ],
-                  "dependencies": [
-                    { "ref": "u1", "dependsOn": [ "t1" ] }
-                  ]
-                }
-                """);
+        Bom upstreamOne = parseBomResource(tempDir, "up-1.json");
 
-        Bom upstreamTwo = parseBom(tempDir, "up-2.json", """
-                {
-                  "bomFormat": "CycloneDX",
-                  "specVersion": "1.5",
-                  "version": 1,
-                  "metadata": {
-                    "component": {
-                      "type": "library",
-                      "bom-ref": "u2",
-                      "group": "com.upstream",
-                      "name": "upstream-two",
-                      "version": "2.0.0",
-                      "purl": "pkg:maven/com.upstream/upstream-two@2.0.0"
-                    }
-                  }
-                }
-                """);
+        Bom upstreamTwo = parseBomResource(tempDir, "up-2.json");
 
         Bom merged = merge(Arrays.asList(upstreamOne, upstreamTwo), null);
 
@@ -496,51 +312,7 @@ class SbomMergerTest {
 
     @Test
     void hoistsNestedComponentsThatAlsoAppearAtTopLevel(@TempDir Path tempDir) throws Exception {
-        Bom bom = parseBom(tempDir, "nested.json", """
-                {
-                  "bomFormat": "CycloneDX",
-                  "specVersion": "1.5",
-                  "version": 1,
-                  "components": [
-                    {
-                      "type": "library",
-                      "bom-ref": "parent",
-                      "group": "com.acme",
-                      "name": "parent-lib",
-                      "version": "1.0.0",
-                      "purl": "pkg:maven/com.acme/parent-lib@1.0.0",
-                      "components": [
-                        {
-                          "type": "library",
-                          "bom-ref": "child",
-                          "group": "com.acme",
-                          "name": "child-lib",
-                          "version": "1.0.0",
-                          "purl": "pkg:maven/com.acme/child-lib@1.0.0",
-                          "components": [
-                            {
-                              "type": "library",
-                              "bom-ref": "grandchild",
-                              "group": "com.acme",
-                              "name": "grandchild-lib",
-                              "version": "1.0.0",
-                              "purl": "pkg:maven/com.acme/grandchild-lib@1.0.0"
-                            }
-                          ]
-                        }
-                      ]
-                    },
-                    {
-                      "type": "library",
-                      "bom-ref": "child-again",
-                      "group": "com.acme",
-                      "name": "child-lib",
-                      "version": "1.0.0",
-                      "purl": "pkg:maven/com.acme/child-lib@1.0.0"
-                    }
-                  ]
-                }
-                """);
+        Bom bom = parseBomResource(tempDir, "nested.json");
 
         Bom merged = merge(Collections.singletonList(bom), null);
 

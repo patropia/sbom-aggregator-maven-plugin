@@ -84,6 +84,13 @@ Modifying merge logic
 
 All SBOM merging and placeholder synthesis lives in SbomMerger.java and associated unit tests. To change the merging behaviour, edit SbomMerger and update SbomMergerTest.
 
+Java baseline
+
+- Java 11 is the minimum supported version: pom.xml sets maven.compiler.release=11 and maven-enforcer-plugin requires [11,).
+- Main and test code must compile on Java 11: do not use text blocks, records, Stream.toList(), switch expressions or pattern-matching instanceof. Put larger test fixtures (e.g. JSON) under src/test/resources instead of text blocks.
+- JUnit stays on 5.x because JUnit 6 requires Java 17; Dependabot is configured to ignore major JUnit updates.
+- ReleaseHygieneTest.javaBaselineStaysAtJava11 enforces the baseline (pom.xml release/enforcer and the src/it poms); CI builds on JDK 11, 17 and 21.
+
 Running tests
 
 - Unit tests: mvn test
