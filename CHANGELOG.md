@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Vulnerability correlation: the `vulnerabilities` sections of all input SBOMs are merged into the aggregated BOM
+  (spec 1.4+). Entries with the same id and source are de-duplicated with their `affects` lists unioned, `affects`
+  refs are rewritten to the final (collision-safe) component bom-refs, and refs to unknown components are dropped.
+  Output is sorted for reproducible builds. Disable with `includeVulnerabilities=false`
+  (`-DsbomAggregator.includeVulnerabilities=false`).
+
 ### Fixed
 - Build no longer fails after the post-release bump to the next `-SNAPSHOT`: the release-hygiene tests now accept
   README and issue-template examples that reference the latest published release (from CHANGELOG.md) while on a

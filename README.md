@@ -63,6 +63,7 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
 | `outputDirectory` | `sbomAggregator.outputDirectory` | `File` | `${project.build.directory}` | Directory where the aggregated SBOM will be written. |
 | `dependencyClassifiers` | `sbomAggregator.dependencyClassifiers` | `List<String>` | `["cyclonedx"]` | List of artifact classifiers to try when resolving dependent SBOMs. |
 | `dependencyExtensions` | `sbomAggregator.dependencyExtensions` | `List<String>` | `["json", "xml"]` | List of file extensions to try when resolving dependent SBOMs. |
+| `includeVulnerabilities` | `sbomAggregator.includeVulnerabilities` | `boolean` | `true` | Merges the `vulnerabilities` sections of the input SBOMs (spec 1.4+): duplicates (same id and source) are merged and `affects` refs are rewritten to the final component bom-refs; refs to unknown components are dropped. |
 | `includeTransitive` | `sbomAggregator.includeTransitive` | `boolean` | `false` | Whether to include transitive dependencies when collecting SBOMs. |
 | `includeScopes` | `sbomAggregator.includeScopes` | `List<String>` | `compile,runtime` | Comma-separated list of scopes to include when resolving transitive dependencies. |
 | `excludes` | `sbomAggregator.excludes` | `List<String>` | (empty) | List of dependency coordinates to exclude, pattern `groupId:artifactId` with `*` wildcard. |
@@ -266,7 +267,7 @@ be prepared before disclosure.
 ## Roadmap
 
 - [x] Support for transitive dependency SBOM resolution
-- [ ] Enhanced vulnerability correlation across aggregated components
+- [x] Enhanced vulnerability correlation across aggregated components
 - [ ] SBOM diff reporting between versions
 - [ ] Support for SPDX format in addition to CycloneDX
 

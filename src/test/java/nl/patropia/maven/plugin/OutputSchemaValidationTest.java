@@ -22,6 +22,7 @@ import org.cyclonedx.generators.BomGeneratorFactory;
 import org.cyclonedx.model.Bom;
 import org.cyclonedx.model.Component;
 import org.cyclonedx.model.Metadata;
+import org.cyclonedx.model.vulnerability.Vulnerability;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -187,6 +188,45 @@ class OutputSchemaValidationTest {
         // The on-disk document must satisfy the schema for the configured version.
         AggregateSbomMojo.validateBomContent(written.getBytes(StandardCharsets.UTF_8), "json",
                 Version.VERSION_15, "1.5");
+    }
+
+    @Test
+    void aggregatedBomWithVulnerabilitiesValidatesFor14To16() throws Exception {
+        String[][] versions = {{"1.4", "VERSION_14"}, {"1.5", "VERSION_15"}, {"1.6", "VERSION_16"}};
+        for (String[] v : versions) {
+            Bom upstream = new Bom();
+            Component lib = new Component();
+            lib.setType(Component.Type.LIBRARY);
+            lib.setBomRef("lib-x");
+            lib.setGroup("com.lib");
+            lib.setName("x");
+            lib.setVersion("1.0");
+            lib.setPurl("pkg:maven/com.lib/x@1.0");
+            upstream.setComponents(new ArrayList<>(List.of(lib)));
+            Vulnerability vulnerability = new Vulnerability();
+            vulnerability.setId("CVE-2024-0001");
+            Vulnerability.Source source = new Vulnerability.Source();
+            source.setName("NVD");
+            vulnerability.setSource(source);
+            Vulnerability.Affect affect = new Vulnerability.Affect();
+            affect.setRef("lib-x");
+            vulnerability.setAffects(new ArrayList<>(List.of(affect)));
+            upstream.setVulnerabilities(new ArrayList<>(List.of(vulnerability)));
+
+            Bom merged = SbomMerger.merge("com.acme", "root", "1.0.0", v[0], List.of(upstream), List.of(), null);
+            assertEquals(1, merged.getVulnerabilities().size(), "vulnerability expected for " + v[0]);
+
+            AggregateSbomMojo mojo = new AggregateSbomMojo();
+            mojo.setSpecVersion(v[0]);
+            mojo.setOutputExtension("json");
+            mojo.setValidateOutput(true);
+            File output = tempDir.resolve("vuln-" + v[0] + "/aggregated-bom.json").toFile();
+            mojo.writeBomToFile(merged, output);
+            String written = Files.readString(output.toPath(), StandardCharsets.UTF_8);
+            assertTrue(written.contains("CVE-2024-0001"), "vulnerability must be serialised for " + v[0]);
+            AggregateSbomMojo.validateBomContent(written.getBytes(StandardCharsets.UTF_8), "json",
+                    Version.valueOf(v[1]), v[0]);
+        }
     }
 
     @Test
