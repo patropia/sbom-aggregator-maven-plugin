@@ -33,7 +33,7 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
 <plugin>
     <groupId>nl.patropia.maven.plugin</groupId>
     <artifactId>sbom-aggregator-maven-plugin</artifactId>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
     <executions>
         <execution>
             <phase>verify</phase>
@@ -139,7 +139,7 @@ Here's a complete example showing how to use this plugin in a multi-module proje
             <plugin>
                 <groupId>nl.patropia.maven.plugin</groupId>
                 <artifactId>sbom-aggregator-maven-plugin</artifactId>
-                <version>1.1.0</version>
+                <version>1.2.0</version>
                 <executions>
                     <execution>
                         <phase>verify</phase>
@@ -164,7 +164,7 @@ If your dependencies use different classifier or format conventions for their SB
 <plugin>
     <groupId>nl.patropia.maven.plugin</groupId>
     <artifactId>sbom-aggregator-maven-plugin</artifactId>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
     <executions>
         <execution>
             <phase>verify</phase>

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-23
+
 ### Added
 - Vulnerability correlation: the `vulnerabilities` sections of all input SBOMs are merged into the aggregated BOM
   (spec 1.4+). Entries with the same id and source are de-duplicated with their `affects` lists unioned, `affects`
@@ -19,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`maven.compiler.release=11`) and the enforcer rule requires Java `[11,)`.
 - CI now builds and tests on JDK 11, 17 and 21.
 - Test dependency moved from JUnit 6.1.3 back to JUnit 5.14.x, because JUnit 6 requires Java 17.
+- Build dependency `maven.version` bumped from 3.9.6 to 3.9.16 (PR #30).
 
 ### Fixed
 - Build no longer fails after the post-release bump to the next `-SNAPSHOT`: the release-hygiene tests now accept
@@ -177,6 +180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Uses Eclipse Aether for artifact resolution
 - Powered by CycloneDX Core Java library for SBOM parsing and generation
 
-[Unreleased]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/releases/tag/v1.0.0
