@@ -26,11 +26,13 @@ import org.cyclonedx.model.Property;
 import org.cyclonedx.model.Service;
 import org.cyclonedx.model.Tool;
 import org.cyclonedx.model.metadata.ToolInformation;
+import org.cyclonedx.model.vulnerability.Vulnerability;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -113,6 +115,9 @@ public final class SbomMerger {
 
     /** First spec version that supports compositions. */
     private static final int SPEC_MINOR_COMPOSITIONS = 4;
+
+    /** First spec version that supports the {@code vulnerabilities} section. */
+    private static final int SPEC_MINOR_VULNERABILITIES = 4;
 
     /** Highest supported CycloneDX 1.x minor version. */
     private static final int MAX_SPEC_MINOR = 7;
@@ -203,6 +208,33 @@ public final class SbomMerger {
                             List<Bom> parsedBoms,
                             List<MissingDependency> missingDeps,
                             Instant outputTimestamp) {
+        return merge(rootGroupId, rootArtifactId, rootVersion, specVersion, parsedBoms, missingDeps,
+                outputTimestamp, true);
+    }
+
+    /**
+     * Merges the given BOMs into a single aggregated BOM, optionally merging their
+     * {@code vulnerabilities} sections.
+     *
+     * <p>When {@code includeVulnerabilities} is {@code true} and the targeted spec is 1.4 or newer,
+     * the vulnerabilities of all input BOMs are merged: entries with the same {@code id} and
+     * {@code source.name} are de-duplicated (their {@code affects} lists are unioned, ratings and
+     * descriptions of the first occurrence are kept), every {@code affects[].ref} is rewritten to the
+     * final bom-ref of the component it pointed at, references that resolve to nothing are dropped,
+     * and a vulnerability left without any resolvable {@code affects} entry is dropped as well, because
+     * it no longer describes anything in the aggregated BOM. The output is sorted by id, then source
+     * name, and each {@code affects} list by ref.
+     *
+     * @see #merge(String, String, String, String, List, List, Instant)
+     */
+    public static Bom merge(String rootGroupId,
+                            String rootArtifactId,
+                            String rootVersion,
+                            String specVersion,
+                            List<Bom> parsedBoms,
+                            List<MissingDependency> missingDeps,
+                            Instant outputTimestamp,
+                            boolean includeVulnerabilities) {
         Objects.requireNonNull(rootGroupId, "rootGroupId must not be null");
         Objects.requireNonNull(rootArtifactId, "rootArtifactId must not be null");
         Objects.requireNonNull(rootVersion, "rootVersion must not be null");
@@ -360,11 +392,142 @@ public final class SbomMerger {
             out.setCompositions(compositions(placeholderRefs, rootRef));
         }
 
+        // 5. vulnerabilities, with affects[].ref translated through each BOM's own bom-ref map
+        if (includeVulnerabilities && specMinor >= SPEC_MINOR_VULNERABILITIES) {
+            List<Vulnerability> vulnerabilities = mergeVulnerabilities(boms, localMaps, state);
+            if (!vulnerabilities.isEmpty()) {
+                out.setVulnerabilities(vulnerabilities);
+            }
+        }
+
         // 6. reproducible document identity: a name-based UUID over the (stable) content of the BOM
         if (outputTimestamp != null) {
             out.setSerialNumber(deterministicSerial(rootRef, specVersion, outputTimestamp, state.merged.keySet()));
         }
         return out;
+    }
+
+    /**
+     * Merges the vulnerabilities of all BOMs. See
+     * {@link #merge(String, String, String, String, List, List, Instant, boolean)} for the rules.
+     */
+    private static List<Vulnerability> mergeVulnerabilities(List<Bom> boms,
+                                                            List<Map<String, String>> localMaps,
+                                                            State state) {
+        Map<String, Vulnerability> byKey = new LinkedHashMap<>();
+        Map<String, Map<String, Vulnerability.Affect>> affectsByKey = new HashMap<>();
+        // bom-refs must be unique per document, so vulnerability refs are deduplicated against every ref already
+        // taken by the root component, the components and the services
+        Set<String> usedVulnerabilityRefs = new HashSet<>(state.usedRefs);
+        usedVulnerabilityRefs.addAll(state.merged.keySet());
+        usedVulnerabilityRefs.addAll(state.services.keySet());
+        int anonymous = 0;
+        for (int i = 0; i < boms.size(); i++) {
+            List<Vulnerability> source = boms.get(i).getVulnerabilities();
+            if (source == null) {
+                continue;
+            }
+            Map<String, String> localMap = localMaps.get(i);
+            for (Vulnerability vulnerability : source) {
+                if (vulnerability == null) {
+                    continue;
+                }
+                String key = isBlank(vulnerability.getId())
+                        ? "\u0000anonymous-" + (anonymous++)
+                        : vulnerability.getId() + "|" + sourceName(vulnerability);
+                Vulnerability target = byKey.get(key);
+                if (target == null) {
+                    target = vulnerability;
+                    target.setBomRef(uniqueVulnerabilityRef(target.getBomRef(), usedVulnerabilityRefs));
+                    byKey.put(key, target);
+                    affectsByKey.put(key, new LinkedHashMap<>());
+                }
+                Map<String, Vulnerability.Affect> affects = affectsByKey.get(key);
+                if (vulnerability.getAffects() == null) {
+                    continue;
+                }
+                for (Vulnerability.Affect affect : vulnerability.getAffects()) {
+                    String ref = affect == null ? null : state.resolve(affect.getRef(), localMap);
+                    if (ref == null) {
+                        continue;
+                    }
+                    Vulnerability.Affect existing = affects.get(ref);
+                    if (existing == null) {
+                        Vulnerability.Affect copy = new Vulnerability.Affect();
+                        copy.setRef(ref);
+                        if (affect.getVersions() != null && !affect.getVersions().isEmpty()) {
+                            copy.setVersions(new ArrayList<>(affect.getVersions()));
+                        }
+                        affects.put(ref, copy);
+                    } else if (affect.getVersions() != null) {
+                        if (existing.getVersions() == null) {
+                            existing.setVersions(new ArrayList<>());
+                        }
+                        Set<String> seen = new HashSet<>();
+                        for (Vulnerability.Version version : existing.getVersions()) {
+                            seen.add(versionKey(version));
+                        }
+                        for (Vulnerability.Version version : affect.getVersions()) {
+                            if (version != null && seen.add(versionKey(version))) {
+                                existing.getVersions().add(version);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        List<Vulnerability> result = new ArrayList<>();
+        for (Map.Entry<String, Vulnerability> entry : byKey.entrySet()) {
+            List<Vulnerability.Affect> affects = new ArrayList<>(affectsByKey.get(entry.getKey()).values());
+            if (affects.isEmpty()) {
+                continue;
+            }
+            affects.sort(Comparator.comparing(Vulnerability.Affect::getRef));
+            Vulnerability vulnerability = entry.getValue();
+            vulnerability.setAffects(affects);
+            result.add(vulnerability);
+        }
+        result.sort(Comparator
+                .comparing((Vulnerability v) -> v.getId() == null ? "" : v.getId())
+                .thenComparing(SbomMerger::sourceName));
+        return result;
+    }
+
+    /**
+     * Returns a content-based key for a version entry. {@code Vulnerability.Version} does not implement
+     * {@code equals}, so versions taken from different SBOMs are never equal by identity and have to be compared
+     * field by field to keep the merged output free of repeated ranges.
+     */
+    private static String versionKey(Vulnerability.Version version) {
+        if (version == null) {
+            return "";
+        }
+        return (version.getVersion() == null ? "" : version.getVersion())
+                + "|" + (version.getRange() == null ? "" : version.getRange())
+                + "|" + (version.getStatus() == null ? "" : version.getStatus().name());
+    }
+
+    /**
+     * Makes a vulnerability {@code bom-ref} unique within the merged document. Different SBOMs may use the same
+     * bom-ref for different vulnerabilities; the first one keeps it and later ones get a {@code #n} suffix.
+     */
+    private static String uniqueVulnerabilityRef(String bomRef, Set<String> usedRefs) {
+        if (isBlank(bomRef)) {
+            return bomRef;
+        }
+        String unique = bomRef;
+        int counter = 2;
+        while (!usedRefs.add(unique)) {
+            unique = bomRef + "#" + counter;
+            counter++;
+        }
+        return unique;
+    }
+
+    private static String sourceName(Vulnerability vulnerability) {
+        Vulnerability.Source source = vulnerability.getSource();
+        return source == null || source.getName() == null ? "" : source.getName();
     }
 
     /**

@@ -28,15 +28,19 @@ The integration tests are under src/it and use the Maven Invoker plugin. Each te
 - setup.groovy                   # shared setup script (creates the file:// test repository)
 - invoker-settings.xml           # Maven settings used by the invoker runs
 
-The 8 test folders are:
+The test folders are:
 
 - fail-on-missing-test           # failOnMissingSbom=true fails the build
+- invalid-sbom-test              # an invalid input SBOM fails the build
 - multi-classifier-test          # several dependency classifiers
 - multi-dependency-test          # multiple dependencies, missing SBOM placeholders
+- reproducible-test              # output is identical between builds
 - simple-integration-test        # baseline aggregation
 - spec-version-test              # spec version selection
 - transitive-test                # transitive SBOM resolution, includes/excludes and scopes
 - transitive-disabled-test       # behaviour when includeTransitive=false (default)
+- vulnerability-merge-test       # vulnerabilities merged, duplicates unioned, affects refs resolve to components
+- vulnerability-multi-sbom-test  # several dependency SBOMs sharing a component bom-ref; affects refs follow renamed components
 - xml-format-test                # XML output format
 
 Public configuration parameters (user properties)
@@ -48,6 +52,7 @@ The README.md is the authoritative source used by unit tests for parameter names
 - dependencyClassifiers      -> sbomAggregator.dependencyClassifiers (List<String>) Default: ["cyclonedx"]
 - dependencyExtensions       -> sbomAggregator.dependencyExtensions (List<String>)  Default: ["json","xml"]
 - includeTransitive          -> sbomAggregator.includeTransitive (boolean)  Default: false
+- includeVulnerabilities     -> sbomAggregator.includeVulnerabilities (boolean) Default: true (merge vulnerabilities, spec 1.4+)
 - includeScopes              -> sbomAggregator.includeScopes (List<String>) Default: [compile,runtime]
 - excludes                   -> sbomAggregator.excludes (List<String>)     Default: (empty)
 - outputClassifier           -> sbomAggregator.outputClassifier (String)   Default: cyclonedx
