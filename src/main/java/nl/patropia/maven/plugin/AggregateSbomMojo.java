@@ -73,6 +73,15 @@ import java.util.Objects;
 )
 public class AggregateSbomMojo extends AbstractMojo {
 
+    /** Classifier of the attached SPDX document. */
+    static final String SPDX_CLASSIFIER = "spdx";
+
+    /** File type of the attached SPDX document (JSON). */
+    static final String SPDX_FILE_TYPE = "json";
+
+    /** Suffix of the SPDX file name; the format is fixed to SPDX 2.3 JSON. */
+    static final String SPDX_FILE_SUFFIX = "spdx.json";
+
     @Parameter(defaultValue = "${project}", readonly = true, required = true)
     private MavenProject project;
 
@@ -201,6 +210,19 @@ public class AggregateSbomMojo extends AbstractMojo {
      */
     @Parameter(property = "sbomAggregator.attach", defaultValue = "true")
     private boolean attach;
+
+    /**
+     * Also write the aggregated BOM as an SPDX 2.3 JSON document named
+     * {@code <outputName>.spdx.json} in the output directory and, when {@code attach} is enabled, attach it
+     * with classifier {@code spdx} and type {@code json}. Default: false
+     * <p>
+     * The document is generated from the aggregated CycloneDX BOM. SPDX 2.3 has no representation for
+     * CycloneDX vulnerabilities, services or compositions, so those sections are not part of the SPDX
+     * output. A fixed {@code outputTimestamp} makes the SPDX document reproducible byte for byte.
+     * </p>
+     */
+    @Parameter(property = "sbomAggregator.generateSpdx", defaultValue = "false")
+    private boolean generateSpdx;
 
     /**
      * Skip execution
@@ -381,6 +403,49 @@ public class AggregateSbomMojo extends AbstractMojo {
                 throw new MojoExecutionException("Failed to attach aggregated SBOM to project", e);
             }
         }
+
+        // 5. Optional SPDX 2.3 output for consumers that work with SPDX instead of CycloneDX
+        if (generateSpdx) {
+            writeSpdxOutput(mergedBom);
+        }
+    }
+
+    /**
+     * Writes the given BOM as an SPDX 2.3 JSON document to {@code <outputDirectory>/<outputName>.spdx.json}
+     * and, when {@code attach} is enabled, attaches it to the project with classifier {@code spdx} and type
+     * {@code json}.
+     *
+     * @param bom the aggregated BOM to convert
+     * @throws MojoExecutionException when the document cannot be written or attached
+     */
+    void writeSpdxOutput(Bom bom) throws MojoExecutionException {
+        File spdxFile = new File(outputDirectory, outputName + "." + SPDX_FILE_SUFFIX);
+        String content = SpdxConverter.toJson(bom, parseOutputTimestamp(outputTimestamp));
+        try {
+            File parent = spdxFile.getParentFile();
+            if (parent != null) {
+                Files.createDirectories(parent.toPath());
+            }
+            Files.write(spdxFile.toPath(), content.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            getLog().error("Failed to write SPDX SBOM: " + e.getMessage());
+            throw new MojoExecutionException("Failed to write SPDX SBOM to output file: " + e.getMessage(), e);
+        }
+        getLog().info("SPDX 2.3 SBOM written to: " + spdxFile.getName());
+
+        if (!attach) {
+            return;
+        }
+        if (projectHelper == null) {
+            throw new MojoExecutionException("Cannot attach SPDX SBOM because projectHelper is not available");
+        }
+        try {
+            projectHelper.attachArtifact(project, SPDX_FILE_TYPE, SPDX_CLASSIFIER, spdxFile);
+            getLog().info("SPDX 2.3 SBOM attached to project with classifier='" + SPDX_CLASSIFIER
+                    + "' and type='" + SPDX_FILE_TYPE + "'.");
+        } catch (Exception e) {
+            throw new MojoExecutionException("Failed to attach SPDX SBOM to project", e);
+        }
     }
 
     /**
@@ -507,6 +572,15 @@ public class AggregateSbomMojo extends AbstractMojo {
             }
         } else {
             outputClassifier = outputClassifier.trim();
+        }
+
+        // The SPDX document is attached as classifier 'spdx' / type 'json'; a CycloneDX artifact with the
+        // same coordinates would be silently replaced, so reject that combination up front.
+        if (generateSpdx && attach && outputClassifier != null
+                && SPDX_CLASSIFIER.equals(outputClassifier) && SPDX_FILE_TYPE.equals(outputExtension())) {
+            throw new MojoExecutionException("outputClassifier '" + SPDX_CLASSIFIER + "' with outputExtension '"
+                    + SPDX_FILE_TYPE + "' clashes with the SPDX artifact written by generateSpdx=true; "
+                    + "choose a different outputClassifier or disable generateSpdx");
         }
     }
 
@@ -696,6 +770,7 @@ public class AggregateSbomMojo extends AbstractMojo {
     void setAttach(boolean attach) { this.attach = attach; }
     void setSkip(boolean skip) { this.skip = skip; }
     void setOutputName(String outputName) { this.outputName = outputName; }
+    void setGenerateSpdx(boolean generateSpdx) { this.generateSpdx = generateSpdx; }
 
     void setProjectHelper(MavenProjectHelper projectHelper) { this.projectHelper = projectHelper; }
 

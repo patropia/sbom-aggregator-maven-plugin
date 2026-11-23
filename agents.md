@@ -75,10 +75,22 @@ Notes:
 
 Adding a new configuration parameter
 
-1. Add an @Parameter field to AggregateSbomMojo.java with a property name beginning with sbomAggregator. For example: @Parameter(property = "sbomAggregator.myParam")
+1. Add an @Parameter field to AggregateSbomMojo.java with a property name beginning with sbomAggregator. For example: @Parameter(property = "sbomAggregator.myParam") (parameters of the diff-sboms goal live in DiffSbomMojo.java and use the sbomAggregator.diff.* prefix)
 2. Update README.md's configuration table (unit tests read README.md to validate parameter names)
 3. Update ParameterPropertyNamingTest: it holds the expected parameter/property set and will fail until the new parameter is added there
 4. Add validation/usage code in the Mojo and add unit tests
+
+SBOM diff
+
+The diff-sboms goal (DiffSbomMojo) reads two SBOMs with SbomInputReader and delegates to the pure SbomDiff logic, which returns an SbomDiffReport. Report rendering (JSON/Markdown, including escaping of untrusted values) lives in DiffSbomMojo; tests are SbomDiffTest, DiffSbomMojoTest and the ITs src/it/diff-test and src/it/diff-fail-test.
+When current is not configured, DiffSbomMojo.currentSbom() resolves ${project.build.directory}/<outputName>.<outputExtension>, sharing the sbomAggregator.outputName/outputExtension properties with aggregate-sboms.
+currentSbom() does not follow AggregateSbomMojo's outputDirectory; users with a custom sbomAggregator.outputDirectory must set sbomAggregator.diff.current. ParameterPropertyNamingTest checks both goals: diff parameters use sbomAggregator.diff.*, except the shared outputName/outputExtension/maxSbomSize (sbomAggregator.*); the read-only buildDirectory is skipped.
+
+SPDX conversion
+
+SpdxConverter is a pure, package-private utility (no Maven API) that converts a CycloneDX Bom into an SPDX 2.3 JSON document: components (nested ones hoisted, the metadata root de-duplicated by bom-ref) become packages; the document DESCRIBES the root, nesting becomes CONTAINS and CycloneDX dependencies become DEPENDS_ON (self-loops, unknown refs and duplicates dropped). Hashes map to checksums (algorithms without an SPDX equivalent, e.g. Streebog, are dropped), licences to licenseDeclared (names become LicenseRef-* with hasExtractedLicensingInfos), purl/CPE to externalRefs. Vulnerabilities, services and compositions have no SPDX 2.3 equivalent and are not converted (the creationInfo comment says so). Pass a fixed Instant to toJson/toSpdx for byte-identical, reproducible output. Tests: SpdxConverterTest.
+aggregate-sboms exposes this via generateSpdx (sbomAggregator.generateSpdx, default false): AggregateSbomMojo.writeSpdxOutput writes <outputDirectory>/<outputName>.spdx.json using the parsed outputTimestamp and attaches it as classifier spdx / type json when attach=true. validateConfiguration rejects outputClassifier=spdx with outputExtension=json in that case (the artifacts would clash). Compound licence expressions are bracketed when AND-joined. Tests: AggregateSbomMojoAttachTest, IT src/it/spdx-output-test.
+documentNamespace hashes the document name, timestamp and a content digest of the rendered packages (id, name, version, supplier, checksums, licences, external refs) plus the relationships (Builder.contentDigest), so it is unique per content yet reproducible. licenseRefFor suffixes colliding LicenseRef slugs with -2, -3, … and always maps the same licence name to the same id.
 
 Modifying merge logic
 

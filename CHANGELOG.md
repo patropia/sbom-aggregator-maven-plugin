@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- New `diff-sboms` goal (default phase `verify`): compares a baseline SBOM with the current (aggregated) SBOM and
+  writes deterministic `sbom-diff.json` / `sbom-diff.md` reports of added, removed, upgraded/downgraded components
+  and new/resolved vulnerabilities. `sbomAggregator.diff.failOnNewVulnerabilities=true` fails the build on new
+  vulnerabilities. Markdown output escapes untrusted SBOM values.
+  When `sbomAggregator.diff.current` is not set, the current SBOM defaults to
+  `${project.build.directory}/<outputName>.<outputExtension>`, so custom output names and XML output work.
+- Internal SPDX 2.3 JSON converter (`SpdxConverter`) mapping CycloneDX components, nesting, dependencies, hashes,
+  licences, purl/CPE references and download locations to SPDX packages and relationships, with reproducible output
+  for a fixed timestamp (groundwork for SPDX output of `aggregate-sboms`).
+- `jackson-databind` is now a declared (direct) dependency instead of arriving transitively via cyclonedx-core-java.
+- SPDX output for `aggregate-sboms`: `generateSpdx=true` (`-DsbomAggregator.generateSpdx=true`) also writes
+  `<outputName>.spdx.json` (SPDX 2.3 JSON) and, when `attach=true`, attaches it with classifier `spdx`. The document
+  is reproducible when `outputTimestamp` is set. `outputClassifier=spdx` with JSON output is rejected when SPDX is
+  attached, because the two artifacts would clash.
+- README documents that `diff-sboms` reads the current SBOM from `${project.build.directory}` and does not follow a
+  custom `sbomAggregator.outputDirectory`; set `sbomAggregator.diff.current` in that case.
+
+### Fixed
+- SPDX conversion brackets compound licence expressions when a component has several licences, so
+  `MIT OR Apache-2.0` plus `BSD-3-Clause` becomes `(MIT OR Apache-2.0) AND BSD-3-Clause` instead of changing meaning.
+- SPDX `documentNamespace` now also hashes the generated package payload (id, name, version, supplier, checksums,
+  licences) and relationships, so two documents that share a name and timestamp but differ in content get distinct
+  namespaces (output stays reproducible for the same BOM).
+- Distinct licence names that sanitise to the same `LicenseRef-*` id (e.g. `MIT License` / `MIT/License`) now get
+  their own ids (`-2`, `-3`, …) instead of silently sharing the first name's extracted licence text.
+
 ## [1.2.0] - 2026-11-23
 
 ### Added
