@@ -1,0 +1,26 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {"type": "application", "bom-ref": "root", "group": "com.acme", "name": "app", "version": "1.0.0",
+      "purl": "pkg:maven/com.acme/app@1.0.0"}
+  },
+  "components": [
+    {"type": "library", "bom-ref": "a", "group": "com.acme", "name": "lib-a", "version": "1.0.0",
+      "purl": "pkg:maven/com.acme/lib-a@1.0.0?type=jar"},
+    {"type": "library", "bom-ref": "b", "group": "com.acme", "name": "lib-b", "version": "2.0.0",
+      "purl": "pkg:maven/com.acme/lib-b@2.0.0?type=jar"},
+    {"type": "library", "bom-ref": "c", "group": "com.acme", "name": "lib-c", "version": "3.1.0",
+      "purl": "pkg:maven/com.acme/lib-c@3.1.0?type=jar"},
+    {"type": "library", "bom-ref": "old", "group": "com.acme", "name": "legacy", "version": "0.9",
+      "purl": "pkg:maven/com.acme/legacy@0.9?type=jar"},
+    {"type": "library", "bom-ref": "np", "group": "org.example", "name": "no-purl", "version": "1.0"}
+  ],
+  "vulnerabilities": [
+    {"bom-ref": "v1", "id": "CVE-2020-0001", "source": {"name": "NVD"},
+      "ratings": [{"severity": "high"}], "affects": [{"ref": "old"}]},
+    {"bom-ref": "v2", "id": "CVE-2021-0002", "source": {"name": "NVD"},
+      "ratings": [{"severity": "medium"}], "affects": [{"ref": "b"}]}
+  ]
+}

@@ -16,6 +16,8 @@
 
 package nl.patropia.maven.plugin;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.maven.artifact.DefaultArtifact;
 import org.apache.maven.artifact.handler.DefaultArtifactHandler;
 import org.apache.maven.artifact.versioning.VersionRange;
@@ -32,6 +34,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -57,6 +60,123 @@ class AggregateSbomMojoAttachTest {
         assertEquals("aggregated-bom.json", helper.files.get(0).getName());
         assertTrue(helper.files.get(0).exists(), "the attached file must exist on disk");
         assertEquals(helper.project, projectOf(mojo), "the project must be passed to the helper");
+    }
+
+    @Test
+    void writesAndAttachesSpdxWhenEnabled(@TempDir Path tempDir) throws Exception {
+        RecordingProjectHelper helper = new RecordingProjectHelper();
+        AggregateSbomMojo mojo = newMojo(tempDir, helper);
+        mojo.setGenerateSpdx(true);
+
+        mojo.execute();
+
+        assertEquals(2, helper.calls.size(), "CycloneDX and SPDX documents must both be attached");
+        assertEquals("cyclonedx", helper.calls.get(0).classifier);
+        assertEquals("json", helper.calls.get(1).type);
+        assertEquals("spdx", helper.calls.get(1).classifier);
+        assertEquals("aggregated-bom.spdx.json", helper.files.get(1).getName());
+        Path spdx = tempDir.resolve("aggregated-bom.spdx.json");
+        assertTrue(Files.exists(spdx));
+        JsonNode doc = new ObjectMapper().readTree(spdx.toFile());
+        assertEquals("SPDX-2.3", doc.path("spdxVersion").asText());
+        assertTrue(Files.exists(tempDir.resolve("aggregated-bom.json")), "the CycloneDX output is still written");
+    }
+
+    @Test
+    void writesSpdxWithoutAttachingWhenAttachIsDisabled(@TempDir Path tempDir) throws Exception {
+        RecordingProjectHelper helper = new RecordingProjectHelper();
+        AggregateSbomMojo mojo = newMojo(tempDir, helper);
+        mojo.setGenerateSpdx(true);
+        mojo.setAttach(false);
+
+        mojo.execute();
+
+        assertTrue(helper.calls.isEmpty());
+        assertTrue(Files.exists(tempDir.resolve("aggregated-bom.spdx.json")));
+    }
+
+    @Test
+    void doesNotWriteSpdxByDefault(@TempDir Path tempDir) throws Exception {
+        RecordingProjectHelper helper = new RecordingProjectHelper();
+        AggregateSbomMojo mojo = newMojo(tempDir, helper);
+
+        mojo.execute();
+
+        assertEquals(1, helper.calls.size());
+        try (java.util.stream.Stream<Path> files = Files.list(tempDir)) {
+            assertTrue(files.noneMatch(p -> p.getFileName().toString().endsWith(".spdx.json")),
+                    "no SPDX document must be written unless generateSpdx=true");
+        }
+    }
+
+    @Test
+    void spdxFileFollowsOutputName(@TempDir Path tempDir) throws Exception {
+        RecordingProjectHelper helper = new RecordingProjectHelper();
+        AggregateSbomMojo mojo = newMojo(tempDir, helper);
+        mojo.setGenerateSpdx(true);
+        mojo.setOutputName("my-sbom");
+
+        mojo.execute();
+
+        assertTrue(Files.exists(tempDir.resolve("my-sbom.spdx.json")));
+        assertEquals("my-sbom.spdx.json", helper.files.get(1).getName());
+    }
+
+    @Test
+    void spdxIsReproducibleWithFixedOutputTimestamp(@TempDir Path tempDir) throws Exception {
+        Path a = Files.createDirectories(tempDir.resolve("a"));
+        Path b = Files.createDirectories(tempDir.resolve("b"));
+        for (Path dir : List.of(a, b)) {
+            AggregateSbomMojo mojo = newMojo(dir, new RecordingProjectHelper());
+            mojo.setGenerateSpdx(true);
+            mojo.setOutputTimestamp("2024-01-01T00:00:00Z");
+            mojo.execute();
+        }
+        byte[] first = Files.readAllBytes(a.resolve("aggregated-bom.spdx.json"));
+        byte[] second = Files.readAllBytes(b.resolve("aggregated-bom.spdx.json"));
+        assertArrayEquals(first, second, "SPDX output must be byte-identical for a fixed outputTimestamp");
+        JsonNode doc = new ObjectMapper().readTree(first);
+        assertTrue(doc.path("creationInfo").path("created").asText().startsWith("2024-01-01T00:00:00"),
+                "created must come from outputTimestamp: " + doc.path("creationInfo"));
+    }
+
+    @Test
+    void failsWithoutProjectHelperWhenAttachingSpdx(@TempDir Path tempDir) throws Exception {
+        AggregateSbomMojo mojo = newMojo(tempDir, null);
+        mojo.setGenerateSpdx(true);
+
+        MojoExecutionException error = assertThrows(MojoExecutionException.class, mojo::execute);
+        assertTrue(error.getMessage().contains("projectHelper"), error.getMessage());
+    }
+
+    @Test
+    void rejectsOutputClassifierClashingWithSpdx(@TempDir Path tempDir) throws Exception {
+        RecordingProjectHelper helper = new RecordingProjectHelper();
+        AggregateSbomMojo mojo = newMojo(tempDir, helper);
+        mojo.setGenerateSpdx(true);
+        mojo.setOutputClassifier(" spdx ");
+
+        MojoExecutionException error = assertThrows(MojoExecutionException.class, mojo::execute);
+        assertTrue(error.getMessage().contains("outputClassifier"), error.getMessage());
+        assertTrue(error.getMessage().contains("generateSpdx"), error.getMessage());
+        assertTrue(helper.calls.isEmpty());
+        assertFalse(Files.exists(tempDir.resolve("aggregated-bom.json")),
+                "an invalid configuration must fail before anything is written");
+    }
+
+    @Test
+    void allowsSpdxClassifierForXmlOutput(@TempDir Path tempDir) throws Exception {
+        RecordingProjectHelper helper = new RecordingProjectHelper();
+        AggregateSbomMojo mojo = newMojo(tempDir, helper);
+        mojo.setGenerateSpdx(true);
+        mojo.setOutputExtension("xml");
+        mojo.setOutputClassifier("spdx");
+
+        mojo.execute();
+
+        assertEquals(2, helper.calls.size());
+        assertEquals("xml", helper.calls.get(0).type);
+        assertEquals("json", helper.calls.get(1).type);
     }
 
     @Test
