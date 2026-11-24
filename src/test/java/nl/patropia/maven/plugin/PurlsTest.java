@@ -19,6 +19,8 @@ package nl.patropia.maven.plugin;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -84,5 +86,50 @@ class PurlsTest {
     void encodeOfNullOrEmptyIsEmpty() {
         assertEquals("", Purls.encode(null));
         assertEquals("", Purls.encode(""));
+    }
+
+    @Test
+    void canonicalKeyIgnoresRpmQualifierOrder() {
+        assertEquals(Purls.canonicalKey("pkg:rpm/redhat/openssl-libs@3.0.7-27.el9?arch=x86_64&distro=rhel-9.4"),
+                Purls.canonicalKey("pkg:RPM/redhat/openssl-libs@3.0.7-27.el9?distro=rhel-9.4&arch=x86_64"));
+    }
+
+    @Test
+    void canonicalKeyNormalisesDebEncodingVariants() {
+        String expected = "pkg:deb/debian/libstdc%2B%2B6@12.2.0-14%2Bdeb12u1?arch=amd64&distro=debian-12";
+        assertEquals(expected, Purls.canonicalKey("pkg:deb/debian/libstdc++6@12.2.0-14+deb12u1?distro=debian-12&arch=amd64"));
+        assertEquals(expected, Purls.canonicalKey("pkg:deb/debian/libstdc%2b%2b6@12.2.0-14%2Bdeb12u1?arch=amd64&distro=debian-12"));
+        assertEquals(expected, Purls.canonicalKey("pkg:deb/debian/libstdc%2B%2B6@12.2.0-14%2bdeb12u1?ARCH=amd64&distro=debian%2D12"));
+    }
+
+    @Test
+    void canonicalKeyKeepsRpmArchVariantsApart() {
+        assertNotEquals(Purls.canonicalKey("pkg:rpm/redhat/openssl-libs@3.0.7?arch=x86_64&distro=rhel-9.4"),
+                Purls.canonicalKey("pkg:rpm/redhat/openssl-libs@3.0.7?arch=aarch64&distro=rhel-9.4"));
+    }
+
+    @Test
+    void canonicalKeyDropsMavenJarTypeButKeepsClassifier() {
+        assertEquals("pkg:maven/g/a@1", Purls.canonicalKey("pkg:maven/g/a@1?type=jar"));
+        assertEquals("pkg:maven/g/a@1?classifier=sources", Purls.canonicalKey("pkg:maven/g/a@1?type=jar&classifier=sources"));
+        assertEquals("pkg:maven/g/a@1?type=pom", Purls.canonicalKey("pkg:maven/g/a@1?type=pom"));
+        assertNotEquals(Purls.canonicalKey("pkg:maven/g/a@1"), Purls.canonicalKey("pkg:maven/g/a@1?classifier=tests"));
+        // type=jar is only a default for maven
+        assertEquals("pkg:generic/a@1?type=jar", Purls.canonicalKey("pkg:generic/a@1?type=jar"));
+    }
+
+    @Test
+    void canonicalKeyOfNonPurlIsNull() {
+        assertNull(Purls.canonicalKey(null));
+        assertNull(Purls.canonicalKey("rpm-x86"));
+        assertEquals("rpm-x86", Purls.matchKey("rpm-x86"));
+    }
+
+    @Test
+    void mavenGroupIdFromNamespace() {
+        assertEquals("com.fasterxml.jackson.core",
+                Purls.mavenGroupId("pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.17.0?type=jar"));
+        assertNull(Purls.mavenGroupId("pkg:rpm/redhat/openssl-libs@3.0.7"));
+        assertNull(Purls.mavenGroupId("pkg:maven/a@1"));
     }
 }

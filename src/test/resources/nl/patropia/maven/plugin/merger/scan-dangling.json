@@ -1,0 +1,51 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "container",
+      "bom-ref": "scan3-root",
+      "name": "app3",
+      "version": "sha256:abc",
+      "purl": "pkg:oci/app3@sha256%3Aabc"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.17.0?type=jar",
+      "name": "jackson-databind",
+      "version": "2.17.0",
+      "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.17.0?type=jar"
+    },
+    {
+      "type": "application",
+      "bom-ref": "busybox",
+      "name": "busybox",
+      "version": "1.36.1",
+      "purl": "pkg:generic/busybox@1.36.1"
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "scan3-root",
+      "dependsOn": [
+        "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.17.0?type=jar",
+        "pkg:maven/org.example/ghost@9.9.9"
+      ]
+    },
+    {
+      "ref": "pkg:maven/org.example/ghost-parent@9.9.9",
+      "dependsOn": ["busybox"]
+    },
+    {
+      "ref": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.17.0?type=jar",
+      "dependsOn": ["pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.17.0?type=jar"]
+    },
+    {
+      "ref": "busybox",
+      "dependsOn": ["scan3-root"]
+    }
+  ]
+}

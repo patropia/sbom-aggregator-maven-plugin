@@ -8,7 +8,7 @@
       "bom-ref": "scan2-root",
       "name": "app2",
       "version": "sha256:abc",
-      "purl": "pkg:oci/app2@sha256%3Adef"
+      "purl": "pkg:oci/app2@sha256%3Aabc"
     }
   },
   "components": [
