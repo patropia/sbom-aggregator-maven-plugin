@@ -407,6 +407,69 @@ class SbomMergerScanInputTest {
         return bom;
     }
 
+    /** A scan of a single jar: its top component has a pkg:maven purl, and it claims jackson -> z. */
+    private static Bom singleJarScanClaimingJacksonDependency() {
+        Bom bom = bomOf(component("jar", "jackson-databind", "2.17.0", JAR_PURL),
+                component("z", "z", "1", "pkg:generic/z@1"));
+        bom.setMetadata(new org.cyclonedx.model.Metadata());
+        bom.getMetadata().setComponent(component("scanned", "scanned", "1.0.0",
+                "pkg:maven/com.acme/scanned@1.0.0?type=jar"));
+        Dependency top = new Dependency("scanned");
+        top.addDependency(new Dependency("jar"));
+        Dependency jar = new Dependency("jar");
+        jar.addDependency(new Dependency("z"));
+        bom.setDependencies(new ArrayList<>(Arrays.asList(top, jar)));
+        return bom;
+    }
+
+    @Test
+    void explicitScanWithMavenTopComponentDoesNotOverrideMavenGraph() {
+        Bom bom = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(mavenLibBom())),
+                new ArrayList<>(Arrays.asList(singleJarScanClaimingJacksonDependency())),
+                new ArrayList<>(), null, true);
+        assertEquals(1, byName(bom, "jackson-databind").size());
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        Component z = byPurl(bom, "pkg:generic/z@1");
+        String scannedRef = byName(bom, "scanned").get(0).getBomRef();
+        String libRef = byPurl(bom, "pkg:maven/com.acme/lib@1.0.0").getBomRef();
+
+        assertEquals(Set.of(), childrenOf(bom, jackson.getBomRef()), "jackson's dependsOn comes from Maven only");
+        assertEquals(Set.of(jackson.getBomRef()), childrenOf(bom, libRef), "Maven parent edge kept");
+        assertTrue(childrenOf(bom, scannedRef).contains(jackson.getBomRef()), "scan -> jar edge kept");
+        assertTrue(childrenOf(bom, scannedRef).contains(z.getBomRef()), "z re-anchored under the scan root");
+        assertTrue(isInferred(z));
+        assertFalse(isInferred(jackson));
+        assertTrue(reachableFromRoot(bom).contains(z.getBomRef()));
+        assertTrue(unknownCompositionRefs(bom).contains(scannedRef));
+    }
+
+    @Test
+    void unmarkedScanWithMavenTopComponentKeepsLegacyHeuristic() {
+        // without the explicit scan marker the pkg:maven top component makes the input authoritative (old behaviour)
+        Bom bom = mergeBoms(mavenLibBom(), singleJarScanClaimingJacksonDependency());
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        Component z = byPurl(bom, "pkg:generic/z@1");
+        assertEquals(Set.of(z.getBomRef()), childrenOf(bom, jackson.getBomRef()));
+        assertFalse(isInferred(z));
+
+        Bom eightArg = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(mavenLibBom(), singleJarScanClaimingJacksonDependency())),
+                new ArrayList<>(), null, true);
+        Component jackson8 = byName(eightArg, "jackson-databind").get(0);
+        assertEquals(Set.of(byPurl(eightArg, "pkg:generic/z@1").getBomRef()), childrenOf(eightArg, jackson8.getBomRef()));
+    }
+
+    @Test
+    void explicitScanWithoutMavenInputKeepsItsOwnEdges() {
+        Bom bom = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5", null,
+                new ArrayList<>(Arrays.asList(singleJarScanClaimingJacksonDependency())), null, null, true);
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        Component z = byPurl(bom, "pkg:generic/z@1");
+        assertEquals(Set.of(z.getBomRef()), childrenOf(bom, jackson.getBomRef()));
+        assertFalse(isInferred(z));
+    }
+
     private static Bom mergeBoms(Bom... boms) {
         return SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
                 new ArrayList<>(Arrays.asList(boms)), new ArrayList<>(), null);

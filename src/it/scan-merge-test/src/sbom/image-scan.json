@@ -1,0 +1,42 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "tools": { "components": [ { "type": "application", "author": "anchore", "name": "syft", "version": "1.0.0" } ] },
+    "component": {
+      "type": "container",
+      "bom-ref": "img-ref",
+      "name": "registry.example.com/acme/app",
+      "version": "sha256:0123456789abcdef",
+      "purl": "pkg:oci/app@sha256%3A0123456789abcdef?repository_url=registry.example.com%2Facme%2Fapp"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "jar-ref",
+      "name": "jackson-databind",
+      "version": "2.17.0",
+      "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.17.0?type=jar"
+    },
+    {
+      "type": "library",
+      "bom-ref": "shaded-ref",
+      "name": "shaded-helper",
+      "version": "1.0",
+      "purl": "pkg:generic/shaded-helper@1.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "rpm-ref",
+      "name": "bash",
+      "version": "5.1.8-9.el9",
+      "purl": "pkg:rpm/redhat/bash@5.1.8-9.el9?arch=x86_64&distro=rhel-9.4"
+    }
+  ],
+  "dependencies": [
+    { "ref": "img-ref", "dependsOn": ["jar-ref"] },
+    { "ref": "jar-ref", "dependsOn": ["shaded-ref"] }
+  ]
+}
