@@ -260,6 +260,44 @@ class OutputSchemaValidationTest {
     }
 
     @Test
+    void mergedMavenAndScanValidatesFrom15() throws Exception {
+        // M3 behaviour: the Maven SBOM decides the dependsOn of a component a scan also lists, while the
+        // scan's own components are anchored under its metadata.component and flagged as inferred. The
+        // resulting document (marker property + compositions + merged graph) must still be schema-valid.
+        String[][] versions = {{"1.5", "VERSION_15"}, {"1.6", "VERSION_16"}};
+        for (String[] v : versions) {
+            Bom merged = SbomMerger.merge("com.acme", "root", "1.0.0", v[0],
+                    new ArrayList<>(List.of(parseResource("maven-deps.json", "maven-" + v[0]),
+                            parseResource("scan-syft.json", "scan-" + v[0]))),
+                    new ArrayList<>(), null);
+
+            AggregateSbomMojo mojo = new AggregateSbomMojo();
+            mojo.setSpecVersion(v[0]);
+            mojo.setOutputExtension("json");
+            mojo.setValidateOutput(true);
+            File output = tempDir.resolve("maven-scan-" + v[0] + "/aggregated-bom.json").toFile();
+            mojo.writeBomToFile(merged, output);
+
+            String written = Files.readString(output.toPath(), StandardCharsets.UTF_8);
+            assertTrue(written.contains(SbomMerger.PROPERTY_INFERRED_DEPENDENCY),
+                    "the inferred-dependency marker must be serialised for " + v[0]);
+            assertTrue(written.contains("\"compositions\""),
+                    "a scan whose components were anchored must be reported in compositions for " + v[0]);
+            AggregateSbomMojo.validateBomContent(written.getBytes(StandardCharsets.UTF_8), "json",
+                    Version.valueOf(v[1]), v[0]);
+        }
+    }
+
+    private Bom parseResource(String name, String target) throws Exception {
+        try (java.io.InputStream in = getClass().getResourceAsStream("merger/" + name)) {
+            assertTrue(in != null, "missing test resource merger/" + name);
+            Path file = tempDir.resolve(target + ".json");
+            Files.write(file, in.readAllBytes());
+            return new org.cyclonedx.parsers.JsonParser().parse(file.toFile());
+        }
+    }
+
+    @Test
     void validationFailureLeavesNoFileBehind() {
         AggregateSbomMojo mojo = new AggregateSbomMojo();
         mojo.setSpecVersion("1.5");

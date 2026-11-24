@@ -19,6 +19,7 @@ package nl.patropia.maven.plugin;
 import org.cyclonedx.model.Bom;
 import org.cyclonedx.model.Component;
 import org.cyclonedx.model.Dependency;
+import org.cyclonedx.model.Property;
 import org.cyclonedx.parsers.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -378,6 +379,91 @@ class SbomMergerScanInputTest {
         return bom;
     }
 
+    private static final String JACKSON_MAVEN = "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.17.0";
+
+    /** A Maven dependency SBOM: lib -> jackson, jackson has no dependencies. */
+    private static Bom mavenLibBom() {
+        Bom bom = bomOf(component(JACKSON_MAVEN, "jackson-databind", "2.17.0", JACKSON_MAVEN));
+        bom.setMetadata(new org.cyclonedx.model.Metadata());
+        bom.getMetadata().setComponent(component("pkg:maven/com.acme/lib@1.0.0", "lib", "1.0.0",
+                "pkg:maven/com.acme/lib@1.0.0"));
+        Dependency lib = new Dependency("pkg:maven/com.acme/lib@1.0.0");
+        lib.addDependency(new Dependency(JACKSON_MAVEN));
+        bom.setDependencies(new ArrayList<>(Arrays.asList(lib, new Dependency(JACKSON_MAVEN))));
+        return bom;
+    }
+
+    /** A scan that claims jar -> z (e.g. a shaded class) and links the jar under its image. */
+    private static Bom scanClaimingJarDependency() {
+        Bom bom = bomOf(component("jar", "jackson-databind", "2.17.0", JAR_PURL),
+                component("z", "z", "1", "pkg:generic/z@1"));
+        bom.setMetadata(new org.cyclonedx.model.Metadata());
+        bom.getMetadata().setComponent(component("img", "image", "1", "pkg:oci/image@1"));
+        Dependency img = new Dependency("img");
+        img.addDependency(new Dependency("jar"));
+        Dependency jar = new Dependency("jar");
+        jar.addDependency(new Dependency("z"));
+        bom.setDependencies(new ArrayList<>(Arrays.asList(img, jar)));
+        return bom;
+    }
+
+    private static Bom mergeBoms(Bom... boms) {
+        return SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(boms)), new ArrayList<>(), null);
+    }
+
+    @Test
+    void mavenParentKeptWhenScanAlsoListsComponent() throws Exception {
+        Bom bom = merge("maven-deps.json", "scan-syft.json");
+        String rootRef = bom.getMetadata().getComponent().getBomRef();
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        assertTrue(childrenOf(bom, rootRef).contains(jackson.getBomRef()));
+        assertFalse(isInferred(jackson));
+        // the scan's incoming edges are kept as well
+        assertTrue(childrenOf(bom, scanRoot(bom, "app").getBomRef()).contains(jackson.getBomRef()));
+        assertTrue(childrenOf(bom, byPurl(bom, "pkg:generic/busybox@1.36.1").getBomRef())
+                .contains(jackson.getBomRef()));
+    }
+
+    @Test
+    void scanOutgoingEdgesIgnoredForMavenDescribedComponent() {
+        assertMavenGraphWins(mergeBoms(mavenLibBom(), scanClaimingJarDependency()));
+    }
+
+    @Test
+    void scanOutgoingEdgesIgnoredRegardlessOfInputOrder() {
+        assertMavenGraphWins(mergeBoms(scanClaimingJarDependency(), mavenLibBom()));
+    }
+
+    private static void assertMavenGraphWins(Bom bom) {
+        List<Component> jacksons = byName(bom, "jackson-databind");
+        assertEquals(1, jacksons.size());
+        Component jackson = jacksons.get(0);
+        Component z = byPurl(bom, "pkg:generic/z@1");
+        String libRef = byPurl(bom, "pkg:maven/com.acme/lib@1.0.0").getBomRef();
+        String imgRef = byPurl(bom, "pkg:oci/image@1").getBomRef();
+
+        assertEquals(Set.of(), childrenOf(bom, jackson.getBomRef()), "jackson's dependsOn comes from Maven");
+        assertEquals(Set.of(jackson.getBomRef()), childrenOf(bom, libRef), "Maven parent edge kept");
+        assertTrue(childrenOf(bom, imgRef).contains(jackson.getBomRef()), "scan -> jar containment edge kept");
+        assertFalse(isInferred(jackson));
+        assertTrue(childrenOf(bom, imgRef).contains(z.getBomRef()), "z hangs under the scan root");
+        assertTrue(isInferred(z));
+        assertTrue(reachableFromRoot(bom).contains(z.getBomRef()));
+        assertTrue(unknownCompositionRefs(bom).contains(imgRef));
+    }
+
+    @Test
+    void scanOutgoingEdgesKeptWhenNoMavenDescription() throws Exception {
+        Bom bom = merge("scan-syft.json");
+        Component jar = byPurl(bom, JAR_PURL);
+        assertEquals(Set.of(jar.getBomRef()), childrenOf(bom, byPurl(bom, "pkg:generic/busybox@1.36.1").getBomRef()));
+        Bom scanOnly = mergeBoms(scanClaimingJarDependency());
+        Component z = byPurl(scanOnly, "pkg:generic/z@1");
+        assertEquals(Set.of(z.getBomRef()), childrenOf(scanOnly, byPurl(scanOnly, JAR_PURL).getBomRef()));
+        assertFalse(isInferred(z));
+    }
+
     @Test
     void jarFromScanShouldMergeWithMavenComponent() throws Exception {
         Bom bom = merge("maven-deps.json", "scan-syft.json");
@@ -397,5 +483,136 @@ class SbomMergerScanInputTest {
         for (Component c : bom.getComponents()) {
             assertTrue(reachable.contains(c.getBomRef()), c.getBomRef() + " unreachable");
         }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Maven graph wins over the scan graph: edge cases around the components whose dependsOn is
+    // taken from the Maven SBOM instead of from the scan.
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * A Maven dependency SBOM whose root depends on jackson and on z; neither has children. z is therefore
+     * already part of the Maven graph when a scan also guesses {@code jar -> z}.
+     */
+    private static Bom mavenLibWithZSiblingBom() {
+        Component jackson = component(JACKSON_MAVEN, "jackson-databind", "2.17.0", JACKSON_MAVEN);
+        Component z = component("maven-z", "z", "1", "pkg:generic/z@1");
+        Bom bom = bomOf(jackson, z);
+        bom.setMetadata(new org.cyclonedx.model.Metadata());
+        bom.getMetadata().setComponent(component("pkg:maven/com.acme/lib@1.0.0", "lib", "1.0.0",
+                "pkg:maven/com.acme/lib@1.0.0"));
+        Dependency lib = new Dependency("pkg:maven/com.acme/lib@1.0.0");
+        lib.addDependency(new Dependency(JACKSON_MAVEN));
+        lib.addDependency(new Dependency("maven-z"));
+        bom.setDependencies(new ArrayList<>(Arrays.asList(lib, new Dependency(JACKSON_MAVEN),
+                new Dependency("maven-z"))));
+        return bom;
+    }
+
+    /**
+     * A Maven SBOM (top component is a {@code pkg:maven} purl) that lists jackson but carries no
+     * {@code dependencies} section at all, so it says nothing about anybody's children.
+     */
+    private static Bom mavenLibBomWithoutDependencies() {
+        Bom bom = bomOf(component(JACKSON_MAVEN, "jackson-databind", "2.17.0", JACKSON_MAVEN));
+        bom.setMetadata(new org.cyclonedx.model.Metadata());
+        bom.getMetadata().setComponent(component("pkg:maven/com.acme/lib@1.0.0", "lib", "1.0.0",
+                "pkg:maven/com.acme/lib@1.0.0"));
+        return bom;
+    }
+
+    /**
+     * A scan that claims a deeper chain than {@link #scanClaimingJarDependency()}: the jar bundles z and z
+     * depends on w. Only the dropped edge {@code jar -> z} has to be replaced, not the level below it.
+     */
+    private static Bom scanClaimingChainedJarDependency() {
+        Bom bom = bomOf(component("jar", "jackson-databind", "2.17.0", JAR_PURL),
+                component("z", "z", "1", "pkg:generic/z@1"),
+                component("w", "w", "1", "pkg:generic/w@1"));
+        bom.setMetadata(new org.cyclonedx.model.Metadata());
+        bom.getMetadata().setComponent(component("img", "image", "1", "pkg:oci/image@1"));
+        Dependency img = new Dependency("img");
+        img.addDependency(new Dependency("jar"));
+        Dependency jar = new Dependency("jar");
+        jar.addDependency(new Dependency("z"));
+        Dependency z = new Dependency("z");
+        z.addDependency(new Dependency("w"));
+        bom.setDependencies(new ArrayList<>(Arrays.asList(img, jar, z)));
+        return bom;
+    }
+
+    @Test
+    void scanEdgeTargetAlreadyInMavenGraphIsNotReAnchored() {
+        Bom bom = mergeBoms(mavenLibWithZSiblingBom(), scanClaimingJarDependency());
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        Component z = byPurl(bom, "pkg:generic/z@1");
+        String libRef = byPurl(bom, "pkg:maven/com.acme/lib@1.0.0").getBomRef();
+        String imgRef = byPurl(bom, "pkg:oci/image@1").getBomRef();
+
+        // the scan's z merges with the Maven z instead of being added a second time
+        assertEquals(1, byName(bom, "z").size());
+        // the scan's guess for jackson is still dropped, the Maven parent and sibling are kept
+        assertEquals(Set.of(), childrenOf(bom, jackson.getBomRef()), "jackson's dependsOn comes from Maven");
+        assertEquals(Set.of(jackson.getBomRef(), z.getBomRef()), childrenOf(bom, libRef));
+        // z is reachable from the root through the Maven graph, so it is neither anchored twice nor flagged
+        assertEquals(Set.of(jackson.getBomRef()), childrenOf(bom, imgRef),
+                "an inferred link must not duplicate a Maven edge to the same component");
+        assertFalse(isInferred(z));
+        assertFalse(isInferred(jackson));
+        assertTrue(reachableFromRoot(bom).contains(z.getBomRef()));
+    }
+
+    @Test
+    void inferredAnchorKeepsTheScanLevelsBelowIt() {
+        Bom bom = mergeBoms(mavenLibBom(), scanClaimingChainedJarDependency());
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        Component z = byPurl(bom, "pkg:generic/z@1");
+        Component w = byPurl(bom, "pkg:generic/w@1");
+        String imgRef = byPurl(bom, "pkg:oci/image@1").getBomRef();
+
+        assertEquals(Set.of(), childrenOf(bom, jackson.getBomRef()));
+        // the scan's edge into the jar is kept and only z has to replace the dropped edge;
+        // z -> w stays as the scan reported it
+        assertEquals(Set.of(jackson.getBomRef(), z.getBomRef()), childrenOf(bom, imgRef));
+        assertTrue(isInferred(z), "the component that replaces the dropped edge is flagged");
+        assertEquals(Set.of(w.getBomRef()), childrenOf(bom, z.getBomRef()), "z -> w keeps its level");
+        assertFalse(isInferred(w), "only the anchor target is flagged, not the subtree below it");
+        Set<String> reachable = reachableFromRoot(bom);
+        assertTrue(reachable.contains(z.getBomRef()) && reachable.contains(w.getBomRef()));
+        assertTrue(unknownCompositionRefs(bom).contains(imgRef));
+    }
+
+    @Test
+    void inferredMarkerIsAddedNextToExistingProperties() {
+        Component z = component("z", "z", "1", "pkg:generic/z@1");
+        z.setProperties(new ArrayList<>(List.of(new Property("scan:source", "syft"))));
+        Bom scan = bomOf(component("jar", "jackson-databind", "2.17.0", JAR_PURL), z);
+        scan.setMetadata(new org.cyclonedx.model.Metadata());
+        scan.getMetadata().setComponent(component("img", "image", "1", "pkg:oci/image@1"));
+        Dependency img = new Dependency("img");
+        img.addDependency(new Dependency("jar"));
+        Dependency jar = new Dependency("jar");
+        jar.addDependency(new Dependency("z"));
+        scan.setDependencies(new ArrayList<>(Arrays.asList(img, jar)));
+
+        Bom bom = mergeBoms(mavenLibBom(), scan);
+        Component merged = byPurl(bom, "pkg:generic/z@1");
+        assertTrue(isInferred(merged));
+        assertTrue(merged.getProperties().stream().anyMatch(p -> "scan:source".equals(p.getName())
+                        && "syft".equals(p.getValue())),
+                "existing properties must survive the inferred marker: " + merged.getProperties());
+    }
+
+    @Test
+    void mavenInputWithoutDependencyGraphDoesNotSuppressScanEdges() {
+        // the Maven SBOM lists jackson but has no dependencies section, so it does not describe any children;
+        // the scan is the only source of that information and its edge is used
+        Bom bom = mergeBoms(mavenLibBomWithoutDependencies(), scanClaimingJarDependency());
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        Component z = byPurl(bom, "pkg:generic/z@1");
+
+        assertEquals(1, byName(bom, "jackson-databind").size());
+        assertEquals(Set.of(z.getBomRef()), childrenOf(bom, jackson.getBomRef()));
+        assertFalse(isInferred(z), "an edge the scan really reported is not inferred");
     }
 }

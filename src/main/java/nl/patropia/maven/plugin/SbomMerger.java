@@ -90,6 +90,13 @@ import org.cyclonedx.model.OrganizationalEntity;
  *       carry the property {@code sbomAggregator:inferredDependency=true}; from spec 1.4 onwards the
  *       anchoring {@code metadata.component} is listed in a composition with aggregate {@code unknown}.
  *       The project's own SBOM is not changed this way.</li>
+ *   <li><b>Maven graph wins:</b> an input whose {@code metadata.component} has a {@code pkg:maven} purl, or the
+ *       project's own SBOM, is authoritative for the {@code dependsOn} of every component it has a
+ *       {@code dependencies} entry for. The {@code dependsOn} that other inputs (scans) list for such a component
+ *       is ignored, because scanners derive it from manifests or shaded classes. Edges <em>into</em> the
+ *       component from a scan (e.g. {@code image -> jar}) are kept, so the scan's levels stay intact. Components
+ *       only reachable through an ignored edge are linked under the scan's {@code metadata.component} as
+ *       orphans.</li>
  *   <li><b>Missing dependencies:</b> each {@link MissingDependency} without an upstream SBOM is
  *       emitted as a {@code LIBRARY} placeholder whose bom-ref and purl are
  *       {@code pkg:maven/groupId/artifactId@version}, and is wired as a child of the root.</li>
@@ -332,6 +339,30 @@ public final class SbomMerger {
         boolean sawOwnBom = false;
         List<String> anchors = new ArrayList<>();
 
+        // 3a. resolve each input's metadata.component and find the refs described by Maven-authoritative inputs
+        List<Boolean> authoritative = new ArrayList<>();
+        Set<String> mavenDescribed = new HashSet<>();
+        for (int i = 0; i < boms.size(); i++) {
+            Bom bom = boms.get(i);
+            Map<String, String> localMap = localMaps.get(i);
+            Component metaComponent = bom.getMetadata() == null ? null : bom.getMetadata().getComponent();
+            String metaRef = metaComponent == null ? null : state.resolve(metaComponent.getBomRef(), localMap);
+            if (metaRef == null && metaComponent != null) {
+                metaRef = state.resolve(metaComponent.getPurl(), localMap);
+            }
+            anchors.add(metaRef);
+            boolean isAuthoritative = rootRef.equals(metaRef) || isMavenPurl(metaComponent);
+            authoritative.add(isAuthoritative);
+            if (isAuthoritative && bom.getDependencies() != null) {
+                for (Dependency dependency : bom.getDependencies()) {
+                    String parent = state.resolve(dependency.getRef(), localMap);
+                    if (parent != null) {
+                        mavenDescribed.add(parent);
+                    }
+                }
+            }
+        }
+
         for (int i = 0; i < boms.size(); i++) {
             Bom bom = boms.get(i);
             Map<String, String> localMap = localMaps.get(i);
@@ -346,6 +377,10 @@ public final class SbomMerger {
                     if (dependency.getDependencies() == null) {
                         continue;
                     }
+                    if (!authoritative.get(i) && mavenDescribed.contains(parent)) {
+                        // a Maven SBOM describes this component's dependencies; a scan's guess is ignored
+                        continue;
+                    }
                     for (Dependency child : dependency.getDependencies()) {
                         String childRef = state.resolve(child.getRef(), localMap);
                         if (childRef == null || childRef.equals(parent) || childRef.equals(rootRef)) {
@@ -356,12 +391,7 @@ public final class SbomMerger {
                 }
             }
 
-            Component metaComponent = bom.getMetadata() == null ? null : bom.getMetadata().getComponent();
-            String metaRef = metaComponent == null ? null : state.resolve(metaComponent.getBomRef(), localMap);
-            if (metaRef == null && metaComponent != null) {
-                metaRef = state.resolve(metaComponent.getPurl(), localMap);
-            }
-            anchors.add(metaRef);
+            String metaRef = anchors.get(i);
             if (metaRef == null) {
                 continue;
             }
@@ -756,6 +786,12 @@ public final class SbomMerger {
                 added = true;
             }
         }
+    }
+
+    /** Whether the component carries a Maven purl, i.e. its input SBOM describes a Maven dependency graph. */
+    private static boolean isMavenPurl(Component component) {
+        return component != null && component.getPurl() != null
+                && component.getPurl().regionMatches(true, 0, "pkg:maven/", 0, "pkg:maven/".length());
     }
 
     private static void markInferred(Component component) {
