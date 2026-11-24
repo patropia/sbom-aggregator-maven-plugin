@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-24
+
 ### Added
 
 - New `scanSboms` parameter (`sbomAggregator.scanSboms`) to merge scanner SBOMs (Syft, Trivy, ...) of a container image,
@@ -17,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking:** the default `specVersion` (`sbomAggregator.specVersion`) is now `1.7` instead of `1.5`, matching
-  the default of the CycloneDX Maven plugin. Set `<specVersion>1.5</specVersion>` to keep the previous output.
+  the default of the CycloneDX Maven plugin. Migration: set `<specVersion>1.5</specVersion>` (or
+  `-DsbomAggregator.specVersion=1.5`) to keep the previous output.
 - A dependency SBOM without a usable `metadata.component` is now anchored under the dependency it was attached to
   (instead of the project root) and counts as a Maven SBOM for `dependsOn`. `SbomMerger.merge(...)` has a new
   overload taking the owner purl of each input.
@@ -249,7 +252,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Uses Eclipse Aether for artifact resolution
 - Powered by CycloneDX Core Java library for SBOM parsing and generation
 
-[Unreleased]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.0.0...v1.1.0
