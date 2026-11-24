@@ -571,6 +571,45 @@ class SbomMergerScanInputTest {
         assertTrue(reachableFromRoot(bom).contains(z.getBomRef()));
     }
 
+    /**
+     * A dependency SBOM with a usable top component keeps that component: the Maven owner is only a fallback
+     * for a file without one. A non-Maven top component (here {@code pkg:generic/archive}) therefore does not
+     * make the file a Maven SBOM, so it does not decide {@code dependsOn} (README, "Standards conformance").
+     */
+    @Test
+    void dependencySbomWithNonMavenTopComponentKeepsItInsteadOfTheOwner() {
+        Component jackson = component(JACKSON_MAVEN, "jackson-databind", "2.17.0", JACKSON_MAVEN);
+        Component sidecar = component("sidecar", "sidecar", "1", "pkg:generic/sidecar@1");
+        Bom bundled = bomOf(jackson, sidecar);
+        bundled.setMetadata(new org.cyclonedx.model.Metadata());
+        bundled.getMetadata().setComponent(component("arch", "archive", "1", "pkg:generic/archive@1"));
+        Dependency arch = new Dependency("arch");
+        arch.addDependency(new Dependency(JACKSON_MAVEN));
+        arch.addDependency(new Dependency("sidecar"));
+        bundled.setDependencies(new ArrayList<>(Arrays.asList(arch, new Dependency(JACKSON_MAVEN),
+                new Dependency("sidecar"))));
+
+        Bom bom = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(projectBom(), bundled)),
+                Arrays.asList(null, "pkg:maven/com.acme/lib@1.0.0"),
+                new ArrayList<>(Arrays.asList(scanClaimingJarDependency())), new ArrayList<>(), null, true);
+
+        String libRef = byPurl(bom, "pkg:maven/com.acme/lib@1.0.0").getBomRef();
+        String archRef = byPurl(bom, "pkg:generic/archive@1").getBomRef();
+        Component mergedJackson = byName(bom, "jackson-databind").get(0);
+        Component z = byPurl(bom, "pkg:generic/z@1");
+
+        assertEquals(Set.of(), childrenOf(bom, libRef),
+                "a file with its own top component is not anchored under the dependency it belongs to");
+        assertTrue(childrenOf(bom, archRef).contains(mergedJackson.getBomRef()),
+                "the file's own top component anchors its components");
+        assertEquals(Set.of(z.getBomRef()), childrenOf(bom, mergedJackson.getBomRef()),
+                "a non-Maven top component does not make the file authoritative for dependsOn");
+        assertTrue(reachableFromRoot(bom).containsAll(
+                        Set.of(mergedJackson.getBomRef(), z.getBomRef(), archRef, libRef)),
+                "owner, top component and inferred components stay reachable from the root");
+    }
+
     @Test
     void componentOnlyReferencedByMavenKeepsScanDependsOn() {
         // documented behaviour: the Maven SBOM links lib -> jackson but has no dependencies entry for jackson,

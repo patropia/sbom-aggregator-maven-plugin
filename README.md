@@ -231,9 +231,11 @@ How the merged SBOM maps onto CycloneDX and SPDX:
   `?arch=aarch64` stay separate components. A component without a purl is matched by its
   `group:name:version`, then by its original `bom-ref`; both indexes cover all input files, so it can merge with
   a component from another SBOM too.
-- **Who decides `dependsOn`.** The project's own SBOM and dependency SBOMs (a `pkg:maven` `metadata.component`, or a
-  file the plugin resolved for a dependency) are authoritative for the `dependsOn` of every component they have a
-  `dependencies` entry for. Scans (`scanSboms`) never are; their edges *into* such a component (`image -> jar`) are
+- **Who decides `dependsOn`.** The project's own SBOM, and those dependency SBOMs that either carry a `pkg:maven`
+  `metadata.component` or have none at all and were resolved for a dependency (so the owning dependency is used as the
+  top component), are authoritative for the `dependsOn` of every component they have a `dependencies` entry for. A
+  dependency SBOM with a usable top component of its own, for example `pkg:generic/...`, keeps that component and is
+  not authoritative. Scans (`scanSboms`) never are; their edges *into* such a component (`image -> jar`) are
   kept. A component that Maven only references as a child, without its own `dependencies` entry, keeps the scan's
   `dependsOn`, because Maven said nothing about it.
 - **Hierarchy for unlinked components.** Components not reachable from the root are linked under their file's
