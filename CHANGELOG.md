@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Components are now matched on a canonical purl key (lowercased type, consistent percent-encoding, sorted
+  qualifiers, Maven `type=jar` ignored while `classifier` is kept), so a jar found by a scanner such as Syft or
+  Trivy (`pkg:maven/...?type=jar`, no `group`) merges with the Maven dependency component instead of being
+  duplicated. A missing `group` is derived from the Maven purl namespace. rpm/deb arch and distro variants stay
+  separate.
+
 ## [1.3.0] - 2026-11-23
 
 ### Added

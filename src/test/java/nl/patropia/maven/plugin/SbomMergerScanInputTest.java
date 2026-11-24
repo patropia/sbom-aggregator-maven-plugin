@@ -44,6 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Characterisation tests for scanner-style (Syft/Trivy) CycloneDX input: jar purls with {@code ?type=jar}
  * and no group, rpm purls with qualifiers, generic purls, scans without dependencies and duplicate purls.
+ * Maven purls are matched on their canonical key, so a scanned jar merges with the Maven component.
  * Disabled tests describe known gaps and the desired behaviour.
  */
 class SbomMergerScanInputTest {
@@ -147,13 +148,85 @@ class SbomMergerScanInputTest {
     }
 
     @Test
-    void jarQualifierAndMissingGroupCauseDuplicate() throws Exception {
+    void jarQualifierAndMissingGroupAreMerged() throws Exception {
         Bom bom = merge("maven-deps.json", "scan-syft.json");
-        assertEquals(2, byName(bom, "jackson-databind").size());
+        List<Component> jars = byName(bom, "jackson-databind");
+        assertEquals(1, jars.size());
+        Component jar = jars.get(0);
+        // the Maven component (first input) survives with its own purl and bom-ref
+        assertEquals("pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.17.0", jar.getPurl());
+        assertEquals("pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.17.0", jar.getBomRef());
+        assertEquals("com.fasterxml.jackson.core", jar.getGroup());
+        // scan edges are redirected to the merged component
+        String scanRef = scanRoot(bom, "app").getBomRef();
+        assertTrue(childrenOf(bom, scanRef).contains(jar.getBomRef()));
+        assertTrue(childrenOf(bom, bom.getMetadata().getComponent().getBomRef()).contains(jar.getBomRef()));
+        assertEquals(Set.of(jar.getBomRef()), childrenOf(bom, byPurl(bom, "pkg:generic/busybox@1.36.1").getBomRef()));
+        // rpm arch variants are not merged by the canonical key
+        assertEquals(2, byName(bom, "openssl-libs").size());
     }
 
     @Test
-    @Disabled("gap: match maven purls ignoring type=jar and fall back to purl namespace/name when group is missing")
+    void componentsSharingOnlyANameAreNotMerged() throws Exception {
+        Bom bom = merge("scan-syft.json");
+        Component a = new Component();
+        a.setName("same");
+        a.setVersion("1.0");
+        a.setPurl("pkg:npm/same@1.0");
+        a.setBomRef("a");
+        Component b = new Component();
+        b.setName("same");
+        b.setVersion("1.0");
+        b.setPurl("pkg:pypi/same@1.0");
+        b.setBomRef("b");
+        Bom extra = new Bom();
+        extra.setComponents(new ArrayList<>(Arrays.asList(a, b)));
+        Bom merged = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(bom, extra)), new ArrayList<>(), null);
+        assertEquals(2, byName(merged, "same").size());
+    }
+
+    @Test
+    void qualifierOrderAndEncodingVariantsMergeAcrossBoms() {
+        Bom first = bomOf(component("rpm-x86", "openssl-libs", "3.0.7-27.el9",
+                "pkg:rpm/redhat/openssl-libs@3.0.7-27.el9?arch=x86_64&distro=rhel-9.4"));
+        Bom second = bomOf(component("rpm-x86-again", "openssl-libs", "3.0.7-27.el9",
+                "pkg:RPM/redhat/openssl-libs@3.0.7-27.el9?DISTRO=rhel%2D9.4&arch=x86_64"));
+        Bom merged = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(first, second)), new ArrayList<>(), null);
+        List<Component> libs = byName(merged, "openssl-libs");
+        assertEquals(1, libs.size());
+        // the first purl survives unchanged, the canonical key is only used for matching
+        assertEquals("pkg:rpm/redhat/openssl-libs@3.0.7-27.el9?arch=x86_64&distro=rhel-9.4", libs.get(0).getPurl());
+    }
+
+    @Test
+    void differentArchQualifierStaysSeparateAcrossBoms() {
+        Bom first = bomOf(component("rpm-x86", "openssl-libs", "3.0.7-27.el9", RPM_X86));
+        Bom second = bomOf(component("rpm-arm", "openssl-libs", "3.0.7-27.el9", RPM_ARM));
+        Bom merged = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(first, second)), new ArrayList<>(), null);
+        assertEquals(2, byName(merged, "openssl-libs").size());
+        assertNotNull(byPurl(merged, RPM_X86));
+        assertNotNull(byPurl(merged, RPM_ARM));
+    }
+
+    private static Component component(String ref, String name, String version, String purl) {
+        Component component = new Component();
+        component.setBomRef(ref);
+        component.setName(name);
+        component.setVersion(version);
+        component.setPurl(purl);
+        return component;
+    }
+
+    private static Bom bomOf(Component... components) {
+        Bom bom = new Bom();
+        bom.setComponents(new ArrayList<>(Arrays.asList(components)));
+        return bom;
+    }
+
+    @Test
     void jarFromScanShouldMergeWithMavenComponent() throws Exception {
         Bom bom = merge("maven-deps.json", "scan-syft.json");
         assertEquals(1, byName(bom, "jackson-databind").size());
