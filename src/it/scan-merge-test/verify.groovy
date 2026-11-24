@@ -5,7 +5,7 @@ assert aggregatedBom.exists() : "Aggregated SBOM file was not created"
 
 def bom = new JsonSlurper().parse(aggregatedBom)
 assert bom.bomFormat == "CycloneDX"
-assert bom.specVersion == "1.5"
+assert bom.specVersion == "1.7"
 
 String rootRef = bom.metadata.component."bom-ref"
 def children = { String ref -> (bom.dependencies.find { it.ref == ref }?.dependsOn ?: []) as Set }

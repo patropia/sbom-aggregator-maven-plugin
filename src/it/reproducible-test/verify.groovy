@@ -31,6 +31,6 @@ assert refs(a).size() == 2 : "Expected the two components from the base SBOM but
 // The aggregated output must itself be schema valid (validateOutput defaults to true, so the build
 // would have failed already; this checks the document is still parseable and complete).
 assert a.bomFormat == "CycloneDX"
-assert a.specVersion == "1.5"
+assert a.specVersion == "1.7"
 
 println("SUCCESS: aggregated SBOM is reproducible (serial ${a.serialNumber}, timestamp ${a.metadata.timestamp})")

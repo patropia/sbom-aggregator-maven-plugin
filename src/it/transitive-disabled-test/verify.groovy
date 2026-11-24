@@ -8,7 +8,7 @@ assert aggregatedBom.exists() : "Aggregated SBOM file was not created"
 def bom = new JsonSlurper().parse(aggregatedBom)
 
 assert bom.bomFormat == "CycloneDX"
-assert bom.specVersion == "1.5"
+assert bom.specVersion == "1.7"
 assert bom.metadata?.component?.name == "transitive-disabled-test"
 
 // Base SBOM component is kept
