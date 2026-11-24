@@ -78,6 +78,7 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
 | `maxSbomSize` | `sbomAggregator.maxSbomSize` | `String` | `50MB` | Maximum size of each input SBOM file, in bytes or with a `KB`/`MB`/`GB` suffix; `0` means unlimited. Each file is held in memory while it is parsed. |
 | `failOnInvalidSbom` | `sbomAggregator.failOnInvalidSbom` | `boolean` | `true` | Fails the build when a dependency SBOM is not a valid CycloneDX JSON/XML document or exceeds `maxSbomSize`. When `false`, the dependency is reported as missing and a placeholder component is emitted. An invalid project SBOM always fails the build. |
 | `validateOutput` | `sbomAggregator.validateOutput` | `boolean` | `true` | Validates the generated SBOM against the bundled CycloneDX JSON/XML schema for `specVersion` before writing it; on failure the build fails and no file is written. Validation is offline. The error message quotes the first schema problem, which can include values from the generated SBOM; run with `-X` to log every problem. |
+| `scanSboms` | `sbomAggregator.scanSboms` | `List<File>` | (empty) | CycloneDX SBOMs from scanners (Syft, Trivy, ...) for a container image, file system or jar, merged into the aggregated SBOM. Components are matched to Maven components by canonical purl; a scan never overrides the `dependsOn` a Maven SBOM gives a component, and components the scan does not connect are linked under the scan's `metadata.component` with `sbomAggregator:inferredDependency=true`. A configured file that is missing or invalid fails the build. |
 | `failOnMissingSbom` | `sbomAggregator.failOnMissingSbom` | `boolean` | `false` | Fails the build if any collected dependency (direct, plus transitive when `includeTransitive=true`) fails to provide an attached SBOM. |
 | `baseline` (diff-sboms) | `sbomAggregator.diff.baseline` | `File` | (none, required) | Baseline CycloneDX SBOM (e.g. the previous release) the `diff-sboms` goal compares against. |
 | `current` (diff-sboms) | `sbomAggregator.diff.current` | `File` | `${project.build.directory}/<outputName>.<outputExtension>` | Current SBOM to compare; defaults to the SBOM written by `aggregate-sboms` (follows `sbomAggregator.outputName` / `sbomAggregator.outputExtension`). |
@@ -197,6 +198,25 @@ If your dependencies use different classifier or format conventions for their SB
 ```
 
 The plugin will try each combination of extension and classifier in order for each dependency until it finds an attached SBOM.
+
+### Merging scanner SBOMs
+
+Add the SBOM of a container image or file-system scan (e.g. `syft my-image -o cyclonedx-json > target/image-scan.json`)
+with `scanSboms`:
+
+```xml
+<configuration>
+    <scanSboms>
+        <scanSbom>${project.build.directory}/image-scan.json</scanSbom>
+    </scanSboms>
+</configuration>
+```
+
+A jar found by the scan (`pkg:maven/...?type=jar`) is merged with the matching Maven dependency, so it appears once,
+keeps its Maven parent and its Maven `dependsOn`, and also stays linked under the image. OS packages such as
+`pkg:rpm/...?arch=x86_64&distro=...` are kept as separate components under the image. Links the scanner did not provide
+are added under the image, marked `sbomAggregator:inferredDependency=true`, and the image is listed with
+`aggregate: unknown` in `compositions` (spec 1.4+).
 
 ### Customizing Output Format
 

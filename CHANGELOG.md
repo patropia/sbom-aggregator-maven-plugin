@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- New `scanSboms` parameter (`sbomAggregator.scanSboms`) to merge scanner SBOMs (Syft, Trivy, ...) of a container image,
+  file system or jar into the aggregated SBOM. Scan inputs are never authoritative for a component's `dependsOn`, even
+  when the scan's top component has a `pkg:maven` purl (e.g. a scan of a single jar). A configured scan file that is
+  missing or invalid fails the build. `SbomMerger.merge(...)` has a new overload taking the scan BOMs separately.
+
 ### Changed
 
 - Components of an input SBOM that cannot be reached from the root (typical for Syft/Trivy scans with empty or

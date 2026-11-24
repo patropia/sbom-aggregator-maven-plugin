@@ -263,11 +263,44 @@ public final class SbomMerger {
                             List<MissingDependency> missingDeps,
                             Instant outputTimestamp,
                             boolean includeVulnerabilities) {
+        return merge(rootGroupId, rootArtifactId, rootVersion, specVersion, parsedBoms, null, missingDeps,
+                outputTimestamp, includeVulnerabilities);
+    }
+
+    /**
+     * Merges the given BOMs into a single aggregated BOM, where {@code scanBoms} are explicitly marked as
+     * scan results (e.g. Syft or Trivy output for a container image, file system or a single jar).
+     *
+     * <p>A scan input is merged like any other input (components are matched by canonical purl, orphans are
+     * anchored under its {@code metadata.component}), but it is <em>never</em> authoritative for the
+     * {@code dependsOn} of a component, even when its {@code metadata.component} has a {@code pkg:maven} purl.
+     * Inputs in {@code parsedBoms} keep the heuristic: they are authoritative when they are the project's own
+     * SBOM or their {@code metadata.component} has a {@code pkg:maven} purl.
+     *
+     * @param scanBoms BOMs produced by scanners; may be {@code null}
+     * @see #merge(String, String, String, String, List, List, Instant, boolean)
+     */
+    public static Bom merge(String rootGroupId,
+                            String rootArtifactId,
+                            String rootVersion,
+                            String specVersion,
+                            List<Bom> parsedBoms,
+                            List<Bom> scanBoms,
+                            List<MissingDependency> missingDeps,
+                            Instant outputTimestamp,
+                            boolean includeVulnerabilities) {
         Objects.requireNonNull(rootGroupId, "rootGroupId must not be null");
         Objects.requireNonNull(rootArtifactId, "rootArtifactId must not be null");
         Objects.requireNonNull(rootVersion, "rootVersion must not be null");
 
-        List<Bom> boms = parsedBoms == null ? new ArrayList<>() : parsedBoms;
+        List<Bom> boms = new ArrayList<>();
+        if (parsedBoms != null) {
+            boms.addAll(parsedBoms);
+        }
+        int firstScan = boms.size();
+        if (scanBoms != null) {
+            boms.addAll(scanBoms);
+        }
         List<MissingDependency> missing = missingDeps == null ? new ArrayList<>() : missingDeps;
 
         String rootRef = Purls.maven(rootGroupId, rootArtifactId, rootVersion, null, null);
@@ -351,7 +384,8 @@ public final class SbomMerger {
                 metaRef = state.resolve(metaComponent.getPurl(), localMap);
             }
             anchors.add(metaRef);
-            boolean isAuthoritative = rootRef.equals(metaRef) || isMavenPurl(metaComponent);
+            // explicitly marked scans never decide a component's dependsOn, even for a pkg:maven top component
+            boolean isAuthoritative = i < firstScan && (rootRef.equals(metaRef) || isMavenPurl(metaComponent));
             authoritative.add(isAuthoritative);
             if (isAuthoritative && bom.getDependencies() != null) {
                 for (Dependency dependency : bom.getDependencies()) {
@@ -426,8 +460,9 @@ public final class SbomMerger {
         // 4b. link components that are not reachable from the root under their input's metadata.component
         Set<String> inferredAnchors = new LinkedHashSet<>();
         for (int i = 0; i < boms.size(); i++) {
-            if (rootRef.equals(anchors.get(i))) {
-                // the project's own SBOM is authoritative for the root's direct dependencies
+            if (i < firstScan && rootRef.equals(anchors.get(i))) {
+                // the project's own SBOM is authoritative for the root's direct dependencies; an explicitly
+                // marked scan of the project itself still gets its orphans linked (as inferred) under the root
                 continue;
             }
             String anchor = anchors.get(i) == null ? rootRef : anchors.get(i);
