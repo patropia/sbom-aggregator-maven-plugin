@@ -20,7 +20,6 @@ import org.cyclonedx.model.Bom;
 import org.cyclonedx.model.Component;
 import org.cyclonedx.model.Dependency;
 import org.cyclonedx.parsers.JsonParser;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -45,7 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Characterisation tests for scanner-style (Syft/Trivy) CycloneDX input: jar purls with {@code ?type=jar}
  * and no group, rpm purls with qualifiers, generic purls, scans without dependencies and duplicate purls.
  * Maven purls are matched on their canonical key, so a scanned jar merges with the Maven component.
- * Disabled tests describe known gaps and the desired behaviour.
+ * Components a scan does not link are hung under the scan's metadata.component and flagged as inferred.
  */
 class SbomMergerScanInputTest {
 
@@ -139,18 +138,142 @@ class SbomMergerScanInputTest {
         Bom bom = merge("scan-syft.json");
         String scanRef = scanRoot(bom, "app").getBomRef();
         assertTrue(childrenOf(bom, bom.getMetadata().getComponent().getBomRef()).contains(scanRef));
-        assertEquals(Set.of(byPurl(bom, JAR_PURL).getBomRef(), byPurl(bom, RPM_X86).getBomRef()),
+        // the scan's own edges plus the inferred links for components the scan does not link (busybox, rpm-arm)
+        assertEquals(Set.of(byPurl(bom, JAR_PURL).getBomRef(), byPurl(bom, RPM_X86).getBomRef(),
+                byPurl(bom, "pkg:generic/busybox@1.36.1").getBomRef(), byPurl(bom, RPM_ARM).getBomRef()),
                 childrenOf(bom, scanRef));
     }
 
     @Test
-    void scanWithoutDependenciesLeavesOrphans() throws Exception {
+    void scanWithoutDependenciesHangsEverythingUnderScanRoot() throws Exception {
         Bom bom = merge("scan-no-deps.json");
-        assertTrue(childrenOf(bom, scanRoot(bom, "app2").getBomRef()).isEmpty());
+        String scanRef = scanRoot(bom, "app2").getBomRef();
         Set<String> reachable = reachableFromRoot(bom);
         for (String purl : Arrays.asList(JAR_PURL, RPM_X86, RPM_ARM, "pkg:generic/busybox@1.36.1")) {
-            assertFalse(reachable.contains(byPurl(bom, purl).getBomRef()), purl + " is currently orphaned");
+            Component c = byPurl(bom, purl);
+            assertTrue(reachable.contains(c.getBomRef()), purl + " must be reachable");
+            assertTrue(childrenOf(bom, scanRef).contains(c.getBomRef()), purl + " must hang under the scan root");
+            assertTrue(isInferred(c), purl + " must be flagged as inferred");
         }
+        assertTrue(unknownCompositionRefs(bom).contains(scanRef));
+    }
+
+    @Test
+    void orphansKeepTheirLevelAndAreFlagged() throws Exception {
+        Bom bom = merge("scan-syft.json");
+        String scanRef = scanRoot(bom, "app").getBomRef();
+        String busybox = byPurl(bom, "pkg:generic/busybox@1.36.1").getBomRef();
+        Component jar = byPurl(bom, JAR_PURL);
+        Component arm = byPurl(bom, RPM_ARM);
+
+        assertEquals(Set.of(jar.getBomRef(), byPurl(bom, RPM_X86).getBomRef(), busybox, arm.getBomRef()),
+                childrenOf(bom, scanRef));
+        assertEquals(Set.of(jar.getBomRef()), childrenOf(bom, busybox));
+        assertTrue(isInferred(arm));
+        assertTrue(isInferred(byPurl(bom, "pkg:generic/busybox@1.36.1")));
+        // components the scan already linked are not flagged
+        assertFalse(isInferred(jar));
+        assertFalse(isInferred(byPurl(bom, RPM_X86)));
+        assertFalse(isInferred(scanRoot(bom, "app")));
+        assertTrue(unknownCompositionRefs(bom).contains(scanRef));
+    }
+
+    @Test
+    void orphanBelowAnotherOrphanIsNotLinkedDirectly() {
+        Component top = component("top", "top", "1", "pkg:generic/top@1");
+        Component below = component("below", "below", "1", "pkg:generic/below@1");
+        Bom scan = bomOf(top, below);
+        scan.setMetadata(new org.cyclonedx.model.Metadata());
+        scan.getMetadata().setComponent(component("s", "scan", "1", "pkg:oci/scan@1"));
+        Dependency topDep = new Dependency("top");
+        topDep.addDependency(new Dependency("below"));
+        scan.setDependencies(new ArrayList<>(Arrays.asList(topDep)));
+        Bom merged = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(scan)), new ArrayList<>(), null);
+        assertEquals(Set.of("top"), childrenOf(merged, "s"));
+        assertEquals(Set.of("below"), childrenOf(merged, "top"));
+        assertFalse(isInferred(byPurl(merged, "pkg:generic/below@1")));
+    }
+
+    @Test
+    void pureCycleOfOrphansIsLinkedOnce() {
+        Component a = component("a", "a", "1", "pkg:generic/a@1");
+        Component b = component("b", "b", "1", "pkg:generic/b@1");
+        Bom scan = bomOf(a, b);
+        scan.setMetadata(new org.cyclonedx.model.Metadata());
+        scan.getMetadata().setComponent(component("s", "scan", "1", "pkg:oci/scan@1"));
+        Dependency da = new Dependency("a");
+        da.addDependency(new Dependency("b"));
+        Dependency db = new Dependency("b");
+        db.addDependency(new Dependency("a"));
+        scan.setDependencies(new ArrayList<>(Arrays.asList(da, db)));
+        Bom merged = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(scan)), new ArrayList<>(), null);
+        assertEquals(Set.of("a"), childrenOf(merged, "s"));
+        Set<String> reachable = reachableFromRoot(merged);
+        assertTrue(reachable.contains("a") && reachable.contains("b"));
+    }
+
+    @Test
+    void orphansOfBomWithoutMetadataComponentHangUnderRoot() {
+        Bom scan = bomOf(component("x", "x", "1", "pkg:generic/x@1"));
+        Bom merged = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(scan)), new ArrayList<>(), null);
+        String rootRef = merged.getMetadata().getComponent().getBomRef();
+        assertEquals(Set.of("x"), childrenOf(merged, rootRef));
+        assertTrue(isInferred(byPurl(merged, "pkg:generic/x@1")));
+        // the root itself is not an anchor with unknown dependencies
+        assertTrue(unknownCompositionRefs(merged).isEmpty());
+    }
+
+    @Test
+    void projectBomPlusScanMakesEverythingReachable() throws Exception {
+        Bom bom = merge("own.json", "scan-syft.json");
+        String rootRef = bom.getMetadata().getComponent().getBomRef();
+        assertTrue(childrenOf(bom, rootRef).contains(scanRoot(bom, "app").getBomRef()));
+        assertTrue(childrenOf(bom, rootRef).contains(byPurl(bom, "pkg:maven/com.acme/dep-1@1.0.0").getBomRef()));
+        // the project's own SBOM stays authoritative: dep-2 is not linked by inference
+        Component dep2 = byPurl(bom, "pkg:maven/com.acme/dep-2@1.0.0");
+        assertFalse(isInferred(dep2));
+        Set<String> reachable = reachableFromRoot(bom);
+        for (Component c : bom.getComponents()) {
+            if (c != dep2) {
+                assertTrue(reachable.contains(c.getBomRef()), c.getBomRef() + " unreachable");
+            }
+        }
+    }
+
+    @Test
+    void noCompositionsBeforeSpec14() throws Exception {
+        Bom bom = SbomMerger.merge("com.acme", "root", "1.0.0", "1.3",
+                new ArrayList<>(Arrays.asList(load("scan-no-deps.json"))), new ArrayList<>(), null);
+        assertTrue(bom.getCompositions() == null || bom.getCompositions().isEmpty());
+        assertTrue(isInferred(byPurl(bom, RPM_ARM)));
+    }
+
+    @Test
+    void mavenOnlyInputGetsNoInferredEdges() throws Exception {
+        Bom bom = merge("maven-deps.json");
+        for (Component c : bom.getComponents()) {
+            assertFalse(isInferred(c), c.getBomRef());
+        }
+        assertTrue(bom.getCompositions() == null || bom.getCompositions().isEmpty());
+    }
+
+    private static boolean isInferred(Component c) {
+        return c.getProperties() != null && c.getProperties().stream().anyMatch(
+                p -> SbomMerger.PROPERTY_INFERRED_DEPENDENCY.equals(p.getName()) && "true".equals(p.getValue()));
+    }
+
+    private static Set<String> unknownCompositionRefs(Bom bom) {
+        Set<String> refs = new HashSet<>();
+        if (bom.getCompositions() != null) {
+            bom.getCompositions().stream()
+                    .filter(c -> c.getAggregate() == org.cyclonedx.model.Composition.Aggregate.UNKNOWN)
+                    .filter(c -> c.getDependencies() != null)
+                    .forEach(c -> c.getDependencies().forEach(r -> refs.add(r.getRef())));
+        }
+        return refs;
     }
 
     @Test
@@ -159,8 +282,10 @@ class SbomMergerScanInputTest {
         String scanRef = scanRoot(bom, "app3").getBomRef();
         String jarRef = byPurl(bom, JAR_PURL).getBomRef();
 
-        // a dependsOn entry without a matching component is dropped, not carried into the graph
-        assertEquals(Set.of(jarRef), childrenOf(bom, scanRef));
+        // a dependsOn entry without a matching component is dropped, not carried into the graph;
+        // busybox is only linked back to the scan root, so it is anchored under it by inference
+        String busyboxRef = byPurl(bom, "pkg:generic/busybox@1.36.1").getBomRef();
+        assertEquals(Set.of(jarRef, busyboxRef), childrenOf(bom, scanRef));
         assertFalse(hasDependencyEntry(bom, "pkg:maven/org.example/ghost@9.9.9"));
         assertFalse(childrenOf(bom, scanRef).contains("pkg:maven/org.example/ghost@9.9.9"));
 
@@ -260,16 +385,12 @@ class SbomMergerScanInputTest {
     }
 
     @Test
-    @Disabled("gap: components of a scan without dependencies should hang under the scan's metadata.component "
-            + "(currently: 0 children, all 4 components unreachable from the root)")
     void orphansShouldHangUnderScanRoot() throws Exception {
         Bom bom = merge("scan-no-deps.json");
         assertEquals(4, childrenOf(bom, scanRoot(bom, "app2").getBomRef()).size());
     }
 
     @Test
-    @Disabled("gap: every merged component should be reachable from the root "
-            + "(currently: components the scan does not link, e.g. the aarch64 rpm, are unreachable)")
     void everyComponentReachableFromRoot() throws Exception {
         Bom bom = merge("scan-syft.json");
         Set<String> reachable = reachableFromRoot(bom);

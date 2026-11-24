@@ -31,7 +31,10 @@ import org.cyclonedx.model.vulnerability.Vulnerability;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
@@ -76,6 +79,17 @@ import org.cyclonedx.model.OrganizationalEntity;
  *       {@code metadata.component} of every upstream SBOM plus one placeholder per missing
  *       dependency. When the project's own SBOM is among the inputs its children are used as the
  *       root's direct dependencies instead.</li>
+ *   <li><b>Root wiring with the project's own SBOM:</b> when the project's own SBOM is merged together
+ *       with other SBOMs (for example a container or file-system scan), every upstream
+ *       {@code metadata.component} that is not reachable from the project's own children is also wired
+ *       as a direct child of the root.</li>
+ *   <li><b>Orphans:</b> scanners often list components without (complete) {@code dependencies}. Every
+ *       component of an upstream SBOM that is not reachable from the root is linked under that SBOM's
+ *       {@code metadata.component} (the root when the SBOM has none). Only orphans without a parent among
+ *       the other orphans of the same SBOM get a direct link, so existing levels are kept. Linked orphans
+ *       carry the property {@code sbomAggregator:inferredDependency=true}; from spec 1.4 onwards the
+ *       anchoring {@code metadata.component} is listed in a composition with aggregate {@code unknown}.
+ *       The project's own SBOM is not changed this way.</li>
  *   <li><b>Missing dependencies:</b> each {@link MissingDependency} without an upstream SBOM is
  *       emitted as a {@code LIBRARY} placeholder whose bom-ref and purl are
  *       {@code pkg:maven/groupId/artifactId@version}, and is wired as a child of the root.</li>
@@ -106,6 +120,13 @@ public final class SbomMerger {
      * always {@code true}.
      */
     public static final String PROPERTY_MISSING_SBOM = "sbomAggregator:missingSbom";
+
+    /**
+     * Property set on a component that was not reachable through its input SBOM's dependency graph and was
+     * therefore linked under that SBOM's {@code metadata.component} (or the root) by inference. The property
+     * is placed on the linked (target) component only. Its value is always {@code true}.
+     */
+    public static final String PROPERTY_INFERRED_DEPENDENCY = "sbomAggregator:inferredDependency";
 
     /** Spec minor version assumed when the requested spec version cannot be parsed. */
     private static final int FALLBACK_SPEC_MINOR = 3;
@@ -309,6 +330,7 @@ public final class SbomMerger {
         Set<String> ownBomChildren = new LinkedHashSet<>();
         Set<String> upstreamRoots = new LinkedHashSet<>();
         boolean sawOwnBom = false;
+        List<String> anchors = new ArrayList<>();
 
         for (int i = 0; i < boms.size(); i++) {
             Bom bom = boms.get(i);
@@ -339,6 +361,7 @@ public final class SbomMerger {
             if (metaRef == null && metaComponent != null) {
                 metaRef = state.resolve(metaComponent.getPurl(), localMap);
             }
+            anchors.add(metaRef);
             if (metaRef == null) {
                 continue;
             }
@@ -355,6 +378,12 @@ public final class SbomMerger {
         Set<String> rootChildren = new LinkedHashSet<>();
         if (sawOwnBom && !ownBomChildren.isEmpty()) {
             rootChildren.addAll(ownBomChildren);
+            graph.put(rootRef, rootChildren);
+            for (String upstreamRoot : upstreamRoots) {
+                if (!reachable(graph, rootRef).contains(upstreamRoot)) {
+                    rootChildren.add(upstreamRoot);
+                }
+            }
         } else {
             rootChildren.addAll(upstreamRoots);
         }
@@ -363,6 +392,26 @@ public final class SbomMerger {
 
         Set<String> rootEntry = new LinkedHashSet<>(rootChildren);
         graph.put(rootRef, rootEntry);
+
+        // 4b. link components that are not reachable from the root under their input's metadata.component
+        Set<String> inferredAnchors = new LinkedHashSet<>();
+        for (int i = 0; i < boms.size(); i++) {
+            if (rootRef.equals(anchors.get(i))) {
+                // the project's own SBOM is authoritative for the root's direct dependencies
+                continue;
+            }
+            String anchor = anchors.get(i) == null ? rootRef : anchors.get(i);
+            Set<String> contributed = new HashSet<>(localMaps.get(i).values());
+            List<String> candidates = new ArrayList<>();
+            for (String ref : state.merged.keySet()) {
+                if (contributed.contains(ref) && !ref.equals(anchor) && !ref.equals(rootRef)) {
+                    candidates.add(ref);
+                }
+            }
+            if (anchorOrphans(graph, rootRef, anchor, candidates, state.merged) && !anchor.equals(rootRef)) {
+                inferredAnchors.add(anchor);
+            }
+        }
 
         // 5. emit dependencies: root first, then one entry per component/placeholder
         List<Dependency> dependencies = new ArrayList<>();
@@ -388,8 +437,10 @@ public final class SbomMerger {
         if (!state.services.isEmpty()) {
             out.setServices(new ArrayList<>(state.services.values()));
         }
-        if (specMinor >= SPEC_MINOR_COMPOSITIONS && !placeholderRefs.isEmpty()) {
-            out.setCompositions(compositions(placeholderRefs, rootRef));
+        if (specMinor >= SPEC_MINOR_COMPOSITIONS && (!placeholderRefs.isEmpty() || !inferredAnchors.isEmpty())) {
+            Set<String> unknownRefs = new LinkedHashSet<>(placeholderRefs);
+            unknownRefs.addAll(inferredAnchors);
+            out.setCompositions(compositions(unknownRefs, rootRef));
         }
 
         // 5. vulnerabilities, with affects[].ref translated through each BOM's own bom-ref map
@@ -645,10 +696,88 @@ public final class SbomMerger {
         return flat;
     }
 
+    /** Returns every ref reachable from {@code start} (inclusive) in {@code graph}. */
+    private static Set<String> reachable(Map<String, Set<String>> graph, String start) {
+        Set<String> seen = new HashSet<>();
+        Deque<String> queue = new ArrayDeque<>();
+        queue.add(start);
+        while (!queue.isEmpty()) {
+            String ref = queue.poll();
+            if (seen.add(ref)) {
+                queue.addAll(graph.getOrDefault(ref, Collections.emptySet()));
+            }
+        }
+        return seen;
+    }
+
+    /**
+     * Links the candidates of one input that are unreachable from the root under {@code anchor}. Only
+     * orphans without an incoming edge from another orphan get a direct link; pure cycles are broken by
+     * linking their first member in insertion order. Linked components are flagged with
+     * {@link #PROPERTY_INFERRED_DEPENDENCY}.
+     *
+     * @return whether at least one inferred edge was added
+     */
+    private static boolean anchorOrphans(Map<String, Set<String>> graph, String rootRef, String anchor,
+                                         List<String> candidates, Map<String, Component> merged) {
+        boolean added = false;
+        while (true) {
+            Set<String> reached = reachable(graph, rootRef);
+            List<String> orphans = new ArrayList<>();
+            for (String ref : candidates) {
+                if (!reached.contains(ref)) {
+                    orphans.add(ref);
+                }
+            }
+            if (orphans.isEmpty()) {
+                return added;
+            }
+            Set<String> hasOrphanParent = new HashSet<>();
+            for (String orphan : orphans) {
+                for (String child : graph.getOrDefault(orphan, Collections.emptySet())) {
+                    if (!child.equals(orphan)) {
+                        hasOrphanParent.add(child);
+                    }
+                }
+            }
+            List<String> tops = new ArrayList<>();
+            for (String orphan : orphans) {
+                if (!hasOrphanParent.contains(orphan)) {
+                    tops.add(orphan);
+                }
+            }
+            if (tops.isEmpty()) {
+                tops.add(orphans.get(0));
+            }
+            Set<String> anchorChildren = graph.computeIfAbsent(anchor, key -> new LinkedHashSet<>());
+            for (String top : tops) {
+                anchorChildren.add(top);
+                markInferred(merged.get(top));
+                added = true;
+            }
+        }
+    }
+
+    private static void markInferred(Component component) {
+        if (component == null) {
+            return;
+        }
+        List<Property> properties = component.getProperties() == null
+                ? new ArrayList<>() : new ArrayList<>(component.getProperties());
+        for (Property property : properties) {
+            if (PROPERTY_INFERRED_DEPENDENCY.equals(property.getName())) {
+                return;
+            }
+        }
+        properties.add(new Property(PROPERTY_INFERRED_DEPENDENCY, "true"));
+        component.setProperties(properties);
+    }
+
     /**
      * Describes how complete the aggregated inventory is. Emitted from spec 1.4 onwards only, and only
-     * when at least one dependency had no SBOM: the placeholder references are reported as
-     * {@code UNKNOWN} (their dependency graph is unknown) and the root as {@code INCOMPLETE}.
+     * when at least one dependency had no SBOM (a placeholder) or at least one input could not describe
+     * its dependency graph and needed inferred links: those references are reported as {@code UNKNOWN}
+     * (their dependency graph is unknown) and the root as {@code INCOMPLETE}.
      */
     static List<Composition> compositions(Set<String> placeholderRefs, String rootRef) {
         List<Composition> compositions = new ArrayList<>();
