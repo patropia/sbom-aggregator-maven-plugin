@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A dependency SBOM without a usable `metadata.component` is now anchored under the dependency it was attached to
+  (instead of the project root) and counts as a Maven SBOM for `dependsOn`. `SbomMerger.merge(...)` has a new
+  overload taking the owner purl of each input.
+- SPDX output: a dependency edge to a component marked `sbomAggregator:inferredDependency=true` is now written as
+  `CONTAINS` instead of `DEPENDS_ON`, since it records containment found by a scanner.
+- README: new "Standards conformance" section (purl matching, `dependsOn` authority, compositions, SPDX mapping).
 - Components of an input SBOM that cannot be reached from the root (typical for Syft/Trivy scans with empty or
   partial `dependencies`) are now linked under that SBOM's `metadata.component` (or under the root when the SBOM
   has none) instead of being left orphaned. Only orphans without a parent among the other orphans get a direct link,

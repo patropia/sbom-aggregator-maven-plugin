@@ -96,7 +96,12 @@ import org.cyclonedx.model.OrganizationalEntity;
  *       is ignored, because scanners derive it from manifests or shaded classes. Edges <em>into</em> the
  *       component from a scan (e.g. {@code image -> jar}) are kept, so the scan's levels stay intact. Components
  *       only reachable through an ignored edge are linked under the scan's {@code metadata.component} as
- *       orphans.</li>
+ *       orphans. A component that a Maven SBOM only references as a child, without a {@code dependencies}
+ *       entry of its own, is not described by Maven: the scan's {@code dependsOn} for it is kept.</li>
+ *   <li><b>Owner of a dependency SBOM:</b> when an input has no usable {@code metadata.component}, the
+ *       caller may pass the purl of the Maven dependency it was attached to (see
+ *       {@link #merge(String, String, String, String, List, List, List, List, Instant, boolean)}); its orphans
+ *       are then anchored under that dependency instead of the root, and the input counts as a Maven SBOM.</li>
  *   <li><b>Missing dependencies:</b> each {@link MissingDependency} without an upstream SBOM is
  *       emitted as a {@code LIBRARY} placeholder whose bom-ref and purl are
  *       {@code pkg:maven/groupId/artifactId@version}, and is wired as a child of the root.</li>
@@ -289,6 +294,36 @@ public final class SbomMerger {
                             List<MissingDependency> missingDeps,
                             Instant outputTimestamp,
                             boolean includeVulnerabilities) {
+        return merge(rootGroupId, rootArtifactId, rootVersion, specVersion, parsedBoms, null, scanBoms,
+                missingDeps, outputTimestamp, includeVulnerabilities);
+    }
+
+    /**
+     * Merges the given BOMs, where {@code ownerRefs} tells for each entry of {@code parsedBoms} which Maven
+     * dependency it was attached to.
+     *
+     * <p>{@code ownerRefs} is parallel to {@code parsedBoms}: entry {@code i} is the purl (e.g.
+     * {@code pkg:maven/g/a@v}) of the dependency whose attached SBOM is {@code parsedBoms.get(i)}, or
+     * {@code null} for the project's own SBOM or an input of unknown origin. When an input has no usable
+     * {@code metadata.component}, the owner is used instead: its unreachable components are anchored under the
+     * owning dependency rather than under the project root, and the input is authoritative for the
+     * {@code dependsOn} of the components it describes (it is a Maven SBOM). An owner that does not resolve to a
+     * component of the merged BOM is ignored. A usable {@code metadata.component} always takes precedence.</p>
+     *
+     * @param ownerRefs owner purls parallel to {@code parsedBoms}; may be {@code null} or shorter than
+     *                  {@code parsedBoms} (missing entries count as {@code null})
+     * @see #merge(String, String, String, String, List, List, List, Instant, boolean)
+     */
+    public static Bom merge(String rootGroupId,
+                            String rootArtifactId,
+                            String rootVersion,
+                            String specVersion,
+                            List<Bom> parsedBoms,
+                            List<String> ownerRefs,
+                            List<Bom> scanBoms,
+                            List<MissingDependency> missingDeps,
+                            Instant outputTimestamp,
+                            boolean includeVulnerabilities) {
         Objects.requireNonNull(rootGroupId, "rootGroupId must not be null");
         Objects.requireNonNull(rootArtifactId, "rootArtifactId must not be null");
         Objects.requireNonNull(rootVersion, "rootVersion must not be null");
@@ -383,9 +418,19 @@ public final class SbomMerger {
             if (metaRef == null && metaComponent != null) {
                 metaRef = state.resolve(metaComponent.getPurl(), localMap);
             }
+            boolean ownedByMavenDependency = false;
+            if (metaRef == null && i < firstScan && ownerRefs != null && i < ownerRefs.size()) {
+                // no usable metadata.component: fall back to the Maven dependency this SBOM was attached to
+                String owner = state.resolve(ownerRefs.get(i), localMap);
+                if (owner != null && !owner.equals(rootRef)) {
+                    metaRef = owner;
+                    ownedByMavenDependency = true;
+                }
+            }
             anchors.add(metaRef);
             // explicitly marked scans never decide a component's dependsOn, even for a pkg:maven top component
-            boolean isAuthoritative = i < firstScan && (rootRef.equals(metaRef) || isMavenPurl(metaComponent));
+            boolean isAuthoritative = i < firstScan
+                    && (rootRef.equals(metaRef) || isMavenPurl(metaComponent) || ownedByMavenDependency);
             authoritative.add(isAuthoritative);
             if (isAuthoritative && bom.getDependencies() != null) {
                 for (Dependency dependency : bom.getDependencies()) {

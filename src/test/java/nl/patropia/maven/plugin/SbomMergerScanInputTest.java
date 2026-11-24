@@ -39,6 +39,7 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -458,6 +459,131 @@ class SbomMergerScanInputTest {
         assertEquals(Set.of(), childrenOf(bom, jackson.getBomRef()), "jackson's dependsOn comes from Maven only");
         assertTrue(isInferred(z), "scan-only edge is re-anchored and marked inferred");
         assertTrue(reachableFromRoot(bom).contains(z.getBomRef()));
+    }
+
+    /** A dependency SBOM without metadata.component: lists jackson and an unlinked shaded helper. */
+    private static Bom libBomWithoutMetadata() {
+        Bom bom = bomOf(component(JACKSON_MAVEN, "jackson-databind", "2.17.0", JACKSON_MAVEN),
+                component("helper", "helper", "1", "pkg:generic/helper@1"));
+        Dependency jackson = new Dependency(JACKSON_MAVEN);
+        jackson.addDependency(new Dependency("helper"));
+        bom.setDependencies(new ArrayList<>(Arrays.asList(jackson)));
+        return bom;
+    }
+
+    /** The project's own SBOM: root -> lib. */
+    private static Bom projectBom() {
+        Bom bom = bomOf(component("pkg:maven/com.acme/lib@1.0.0", "lib", "1.0.0", "pkg:maven/com.acme/lib@1.0.0"));
+        bom.setMetadata(new org.cyclonedx.model.Metadata());
+        bom.getMetadata().setComponent(component("pkg:maven/com.acme/root@1.0.0", "root", "1.0.0",
+                "pkg:maven/com.acme/root@1.0.0"));
+        Dependency root = new Dependency("pkg:maven/com.acme/root@1.0.0");
+        root.addDependency(new Dependency("pkg:maven/com.acme/lib@1.0.0"));
+        bom.setDependencies(new ArrayList<>(Arrays.asList(root,
+                new Dependency("pkg:maven/com.acme/lib@1.0.0"))));
+        return bom;
+    }
+
+    @Test
+    void dependencySbomWithoutMetadataComponentIsAnchoredUnderItsOwner() {
+        Bom bom = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(projectBom(), libBomWithoutMetadata())),
+                Arrays.asList(null, "pkg:maven/com.acme/lib@1.0.0"),
+                null, new ArrayList<>(), null, true);
+        String rootRef = bom.getMetadata().getComponent().getBomRef();
+        String libRef = byPurl(bom, "pkg:maven/com.acme/lib@1.0.0").getBomRef();
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        Component helper = byPurl(bom, "pkg:generic/helper@1");
+
+        assertEquals(Set.of(libRef), childrenOf(bom, rootRef), "the root keeps only its direct dependency");
+        assertEquals(Set.of(jackson.getBomRef()), childrenOf(bom, libRef), "orphan hangs under its owner");
+        assertEquals(Set.of(helper.getBomRef()), childrenOf(bom, jackson.getBomRef()), "existing level kept");
+        assertTrue(isInferred(jackson));
+        assertFalse(isInferred(helper));
+        assertTrue(unknownCompositionRefs(bom).contains(libRef));
+    }
+
+    @Test
+    void withoutOwnerTheSameSbomFallsBackToTheRoot() {
+        Bom bom = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(projectBom(), libBomWithoutMetadata())),
+                new ArrayList<>(), null, true);
+        String rootRef = bom.getMetadata().getComponent().getBomRef();
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        assertTrue(childrenOf(bom, rootRef).contains(jackson.getBomRef()));
+    }
+
+    @Test
+    void ownerThatResolvesToTheRootIsIgnored() {
+        // the plugin records null for the project's own SBOM; an owner that resolves to the root must not turn
+        // the file into a Maven authority either (SbomMerger: "!owner.equals(rootRef)")
+        Bom lib = bomOf(component(JACKSON_MAVEN, "jackson-databind", "2.17.0", JACKSON_MAVEN));
+        lib.setDependencies(new ArrayList<>(Arrays.asList(new Dependency(JACKSON_MAVEN))));
+        Bom bom = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(projectBom(), lib)),
+                Arrays.asList(null, "pkg:maven/com.acme/root@1.0.0"),
+                new ArrayList<>(Arrays.asList(scanClaimingJarDependency())), new ArrayList<>(), null, true);
+        String rootRef = bom.getMetadata().getComponent().getBomRef();
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        Component z = byPurl(bom, "pkg:generic/z@1");
+
+        assertTrue(reachableFromRoot(bom).contains(jackson.getBomRef()), "jackson stays reachable from the root");
+        assertEquals(Set.of(z.getBomRef()), childrenOf(bom, jackson.getBomRef()),
+                "an owner equal to the root is not a Maven authority, so the scan's edge is kept");
+        assertFalse(isInferred(z), "the scan's own edge is not an inferred link");
+    }
+
+    @Test
+    void unresolvableOwnerFallsBackToTheRoot() {
+        // ownerPurl(...) returns null for unknown coordinates; matching one that is not part of the merged
+        // SBOM must be ignored instead of failing or creating a dangling anchor
+        Bom lib = bomOf(component(JACKSON_MAVEN, "jackson-databind", "2.17.0", JACKSON_MAVEN));
+        lib.setDependencies(new ArrayList<>(Arrays.asList(new Dependency(JACKSON_MAVEN))));
+        Bom bom = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(projectBom(), lib)),
+                Arrays.asList(null, "pkg:maven/com.acme/not-a-dependency@1.0.0"),
+                new ArrayList<>(Arrays.asList(scanClaimingJarDependency())), new ArrayList<>(), null, true);
+        String rootRef = bom.getMetadata().getComponent().getBomRef();
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        Component z = byPurl(bom, "pkg:generic/z@1");
+
+        assertTrue(reachableFromRoot(bom).contains(jackson.getBomRef()));
+        assertEquals(Set.of(z.getBomRef()), childrenOf(bom, jackson.getBomRef()),
+                "an owner that matches nothing leaves the file non-authoritative");
+        assertNull(byPurl(bom, "pkg:maven/com.acme/not-a-dependency@1.0.0"),
+                "an unmatched owner must not be added to the SBOM");
+    }
+
+    @Test
+    void ownerMakesDependencySbomAuthoritativeOverScan() {
+        // the dependency SBOM has no metadata.component but describes jackson (no dependencies);
+        // its owner makes it a Maven SBOM, so the scan's jackson -> z claim is ignored
+        Bom lib = bomOf(component(JACKSON_MAVEN, "jackson-databind", "2.17.0", JACKSON_MAVEN));
+        lib.setDependencies(new ArrayList<>(Arrays.asList(new Dependency(JACKSON_MAVEN))));
+        Bom bom = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(projectBom(), lib)),
+                Arrays.asList(null, "pkg:maven/com.acme/lib@1.0.0"),
+                new ArrayList<>(Arrays.asList(scanClaimingJarDependency())), new ArrayList<>(), null, true);
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        Component z = byPurl(bom, "pkg:generic/z@1");
+        assertEquals(Set.of(), childrenOf(bom, jackson.getBomRef()));
+        assertTrue(isInferred(z));
+        assertTrue(reachableFromRoot(bom).contains(z.getBomRef()));
+    }
+
+    @Test
+    void componentOnlyReferencedByMavenKeepsScanDependsOn() {
+        // documented behaviour: the Maven SBOM links lib -> jackson but has no dependencies entry for jackson,
+        // so Maven said nothing about jackson's own dependencies and the scan's jackson -> z edge is kept
+        Bom maven = mavenLibBom();
+        maven.getDependencies().removeIf(d -> JACKSON_MAVEN.equals(d.getRef()));
+        Bom bom = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
+                new ArrayList<>(Arrays.asList(maven)),
+                new ArrayList<>(Arrays.asList(scanClaimingJarDependency())), new ArrayList<>(), null, true);
+        Component jackson = byName(bom, "jackson-databind").get(0);
+        Component z = byPurl(bom, "pkg:generic/z@1");
+        assertEquals(Set.of(z.getBomRef()), childrenOf(bom, jackson.getBomRef()));
+        assertFalse(isInferred(z));
     }
 
     @Test

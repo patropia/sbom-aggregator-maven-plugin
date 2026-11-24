@@ -313,6 +313,18 @@ class AggregateSbomMojoTest {
     }
 
     @Test
+    void ownerPurlRequiresCompleteCoordinates() {
+        assertEquals("pkg:maven/com.acme/lib@1.0.0",
+                AggregateSbomMojo.ownerPurl(new AggregateSbomMojo.DepCoord("com.acme", "lib", "1.0.0", "compile")));
+        // incomplete coordinates cannot be expressed as a purl, so the merger has to ignore the owner
+        assertNull(AggregateSbomMojo.ownerPurl(null));
+        assertNull(AggregateSbomMojo.ownerPurl(new AggregateSbomMojo.DepCoord(null, "lib", "1.0.0", null)));
+        assertNull(AggregateSbomMojo.ownerPurl(new AggregateSbomMojo.DepCoord("com.acme", "", "1.0.0", null)));
+        assertNull(AggregateSbomMojo.ownerPurl(new AggregateSbomMojo.DepCoord("com.acme", "lib", null, null)));
+        assertNull(AggregateSbomMojo.ownerPurl(new AggregateSbomMojo.DepCoord("com.acme", "lib", " ", null)));
+    }
+
+    @Test
     void missingScanSbomFailsTheBuild(@TempDir Path tempDir) {
         AggregateSbomMojo mojo = new AggregateSbomMojo();
         mojo.setScanSboms(Collections.singletonList(tempDir.resolve("does-not-exist.json").toFile()));
