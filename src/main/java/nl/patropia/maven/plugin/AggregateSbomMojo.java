@@ -195,6 +195,20 @@ public class AggregateSbomMojo extends AbstractMojo {
     @Parameter(property = "sbomAggregator.failOnMissingSbom", defaultValue = "false")
     private boolean failOnMissingSbom;
 
+    /**
+     * CycloneDX SBOMs produced by scanners (e.g. Syft or Trivy output for a container image, file system or a
+     * single jar) to merge into the aggregated SBOM.
+     * <p>
+     * Scan components are matched to Maven components by canonical purl (e.g. {@code ?type=jar} is ignored), and
+     * components the scan does not connect are linked under the scan's {@code metadata.component} with the
+     * property {@code sbomAggregator:inferredDependency=true}. A scan never decides the {@code dependsOn} of a
+     * component that a Maven SBOM describes, even when the scan's own top component has a {@code pkg:maven} purl.
+     * A configured file that is missing or not a valid CycloneDX document always fails the build.
+     * </p>
+     */
+    @Parameter(property = "sbomAggregator.scanSboms")
+    private List<File> scanSboms;
+
     @Component
     private RepositorySystem repoSystem;
 
@@ -348,7 +362,11 @@ public class AggregateSbomMojo extends AbstractMojo {
             }
         }
 
-        if (boms.isEmpty() && missingSboms.isEmpty()) {
+        // 3b. Parse explicitly configured scan SBOMs; they were configured on purpose, so problems always fail
+        warnDuplicateScanInputs(sbomFilesToMerge);
+        List<Bom> scans = readScanSboms(reader);
+
+        if (boms.isEmpty() && scans.isEmpty() && missingSboms.isEmpty()) {
             getLog().warn("No SBOM files available to aggregate - creating minimal SBOM");
         }
 
@@ -363,13 +381,14 @@ public class AggregateSbomMojo extends AbstractMojo {
             }
         }
 
-        getLog().debug("Merging " + boms.size() + " BOMs in-memory");
+        getLog().debug("Merging " + boms.size() + " BOMs and " + scans.size() + " scan SBOMs in-memory");
         Bom mergedBom = SbomMerger.merge(
                 project.getGroupId(),
                 project.getArtifactId(),
                 project.getVersion(),
                 specVersion,
                 boms,
+                scans,
                 missingSboms,
                 parseOutputTimestamp(outputTimestamp),
                 includeVulnerabilities);
@@ -736,7 +755,64 @@ public class AggregateSbomMojo extends AbstractMojo {
         }
     }
 
+    /**
+     * Reads the configured {@code scanSboms}. A missing, unreadable or invalid scan file fails the build.
+     */
+    List<Bom> readScanSboms(SbomInputReader reader) throws MojoExecutionException {
+        List<Bom> scans = new ArrayList<>();
+        if (scanSboms == null) {
+            return scans;
+        }
+        for (File file : scanSboms) {
+            if (file == null) {
+                continue;
+            }
+            if (!file.isFile()) {
+                throw new MojoExecutionException("Configured scan SBOM not found: " + file.getAbsolutePath());
+            }
+            try {
+                scans.add(reader.read(file));
+                getLog().debug("Read scan SBOM " + file.getAbsolutePath());
+            } catch (SbomInputReader.InvalidSbomException e) {
+                throw new MojoExecutionException(e.getMessage(), e);
+            }
+        }
+        return scans;
+    }
+
+    /**
+     * Warns when a configured scan SBOM is also merged as a regular (project or dependency) SBOM. Such a file is
+     * merged twice and its scan copy adds nothing.
+     */
+    void warnDuplicateScanInputs(List<File> sbomFilesToMerge) {
+        if (scanSboms == null || sbomFilesToMerge == null || sbomFilesToMerge.isEmpty()) {
+            return;
+        }
+        java.util.Set<String> merged = new java.util.HashSet<>();
+        for (File f : sbomFilesToMerge) {
+            merged.add(canonicalPath(f));
+        }
+        for (File scan : scanSboms) {
+            if (scan != null && merged.contains(canonicalPath(scan))) {
+                getLog().warn("Scan SBOM " + scan.getAbsolutePath()
+                        + " is also merged as a project/dependency SBOM; it will be merged twice");
+            }
+        }
+    }
+
+    private static String canonicalPath(File file) {
+        try {
+            return file.getCanonicalPath();
+        } catch (java.io.IOException e) {
+            return file.getAbsolutePath();
+        }
+    }
+
     // Package-private setters for unit tests.
+
+    void setScanSboms(List<File> scanSboms) {
+        this.scanSboms = scanSboms;
+    }
 
     void setSpecVersion(String specVersion) {
         this.specVersion = specVersion;

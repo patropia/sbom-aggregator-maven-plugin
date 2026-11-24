@@ -311,4 +311,54 @@ class AggregateSbomMojoTest {
             assertTrue(error.getMessage().contains(bad), error.getMessage());
         }
     }
+
+    @Test
+    void missingScanSbomFailsTheBuild(@TempDir Path tempDir) {
+        AggregateSbomMojo mojo = new AggregateSbomMojo();
+        mojo.setScanSboms(Collections.singletonList(tempDir.resolve("does-not-exist.json").toFile()));
+        org.apache.maven.plugin.MojoExecutionException error = assertThrows(
+                org.apache.maven.plugin.MojoExecutionException.class,
+                () -> mojo.readScanSboms(new SbomInputReader(0L)));
+        assertTrue(error.getMessage().contains("does-not-exist.json"));
+    }
+
+    @Test
+    void invalidScanSbomFailsTheBuild(@TempDir Path tempDir) throws Exception {
+        File invalid = tempDir.resolve("scan.json").toFile();
+        try (FileWriter writer = new FileWriter(invalid)) {
+            writer.write("{ \"bomFormat\": \"CycloneDX\", invalid json syntax... ");
+        }
+        AggregateSbomMojo mojo = new AggregateSbomMojo();
+        mojo.setFailOnInvalidSbom(false); // scans were configured explicitly, so this does not apply
+        mojo.setScanSboms(Collections.singletonList(invalid));
+        assertThrows(org.apache.maven.plugin.MojoExecutionException.class,
+                () -> mojo.readScanSboms(new SbomInputReader(0L)));
+    }
+
+    @Test
+    void validScanSbomsAreRead(@TempDir Path tempDir) throws Exception {
+        File scan = tempDir.resolve("scan.json").toFile();
+        try (FileWriter writer = new FileWriter(scan)) {
+            writer.write("{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"version\":1,"
+                    + "\"components\":[{\"type\":\"library\",\"name\":\"bash\",\"version\":\"5.1\","
+                    + "\"purl\":\"pkg:rpm/redhat/bash@5.1?arch=x86_64\"}]}");
+        }
+        AggregateSbomMojo mojo = new AggregateSbomMojo();
+        assertTrue(mojo.readScanSboms(new SbomInputReader(0L)).isEmpty(), "no scans configured");
+        mojo.setScanSboms(Arrays.asList(scan, null));
+        List<Bom> scans = mojo.readScanSboms(new SbomInputReader(0L));
+        assertEquals(1, scans.size());
+        assertEquals("bash", scans.get(0).getComponents().get(0).getName());
+    }
+
+    @Test
+    void nullScanSbomsListReturnsEmpty(@TempDir Path tempDir) throws Exception {
+        AggregateSbomMojo mojo = new AggregateSbomMojo();
+        mojo.setScanSboms(null);
+        assertTrue(mojo.readScanSboms(new SbomInputReader(0L)).isEmpty());
+        // duplicate check must tolerate null lists/entries without failing
+        mojo.warnDuplicateScanInputs(Arrays.asList(tempDir.resolve("a.json").toFile()));
+        mojo.setScanSboms(Arrays.asList(tempDir.resolve("a.json").toFile(), null));
+        mojo.warnDuplicateScanInputs(Arrays.asList(tempDir.resolve("a.json").toFile()));
+    }
 }

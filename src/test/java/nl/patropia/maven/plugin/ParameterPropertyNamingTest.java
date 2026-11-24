@@ -66,6 +66,7 @@ class ParameterPropertyNamingTest {
     /** Every configurable (editable) parameter of the aggregate goal, with the user property it must expose. */
     private static final Set<String> EXPECTED_PARAMETERS = new TreeSet<>(List.of(
             "projectSbom",
+            "scanSboms",
             "outputDirectory",
             "outputName",
             "outputClassifier",
