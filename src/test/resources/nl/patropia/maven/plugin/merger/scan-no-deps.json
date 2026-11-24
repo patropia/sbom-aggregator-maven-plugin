@@ -1,0 +1,44 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "container",
+      "bom-ref": "scan2-root",
+      "name": "app2",
+      "version": "sha256:abc",
+      "purl": "pkg:oci/app2@sha256%3Adef"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.17.0?type=jar",
+      "name": "jackson-databind",
+      "version": "2.17.0",
+      "purl": "pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.17.0?type=jar"
+    },
+    {
+      "type": "library",
+      "bom-ref": "rpm-x86",
+      "name": "openssl-libs",
+      "version": "3.0.7-27.el9",
+      "purl": "pkg:rpm/redhat/openssl-libs@3.0.7-27.el9?arch=x86_64&distro=rhel-9.4"
+    },
+    {
+      "type": "library",
+      "bom-ref": "rpm-arm",
+      "name": "openssl-libs",
+      "version": "3.0.7-27.el9",
+      "purl": "pkg:rpm/redhat/openssl-libs@3.0.7-27.el9?arch=aarch64&distro=rhel-9.4"
+    },
+    {
+      "type": "application",
+      "bom-ref": "busybox",
+      "name": "busybox",
+      "version": "1.36.1",
+      "purl": "pkg:generic/busybox@1.36.1"
+    }
+  ]
+}
