@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When the project's own SBOM is merged together with other SBOMs, every upstream `metadata.component` that is not
   reachable through the project's own dependencies is now also a direct dependency of the root (previously such a
   scan was unreachable).
+- When a component is described both by a Maven SBOM (an input whose `metadata.component` has a `pkg:maven` purl,
+  or the project's own SBOM) and by a scan, its `dependsOn` now comes from the Maven SBOM only; the scan's
+  outgoing edges for that component are ignored. The scan's edges into the component and its Maven parent are
+  kept. Components only reachable through an ignored edge are linked under the scan's `metadata.component` and
+  flagged as inferred.
 
 ### Fixed
 
