@@ -60,7 +60,7 @@ The README.md is the authoritative source used by unit tests for parameter names
 - outputName                 -> sbomAggregator.outputName (String)         Default: aggregated-bom
 - attach                     -> sbomAggregator.attach (boolean)             Default: true
 - skip                       -> sbomAggregator.skip (boolean)               Default: false
-- specVersion                -> sbomAggregator.specVersion (String)        Default: 1.5
+- specVersion                -> sbomAggregator.specVersion (String)        Default: 1.7
 - outputTimestamp            -> sbomAggregator.outputTimestamp (String)    Default: ${project.build.outputTimestamp}
 - maxSbomSize                -> sbomAggregator.maxSbomSize (String)        Default: 50MB (bytes or KB/MB/GB; 0 = unlimited)
 - failOnInvalidSbom          -> sbomAggregator.failOnInvalidSbom (boolean) Default: true

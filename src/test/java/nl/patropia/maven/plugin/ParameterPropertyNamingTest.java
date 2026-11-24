@@ -152,7 +152,7 @@ class ParameterPropertyNamingTest {
     }
 
     @Test
-    void legacyBarePropertyNamesAreNoLongerHonoured() {
+    void legacyBarePropertyNamesAreNoLongerHonoured() throws Exception {
         Element configuration = firstChild(mojo, "configuration");
         assertNotNull(configuration);
 
@@ -162,8 +162,13 @@ class ParameterPropertyNamingTest {
         assertNotNull(specVersion);
         assertEquals("${" + PREFIX + "specVersion}", specVersion.getTextContent().trim(),
                 "specVersion must be bound to -DsbomAggregator.specVersion (bare -DspecVersion is not supported)");
-        assertEquals("1.5", specVersion.getAttribute("default-value"),
+        assertEquals("1.7", specVersion.getAttribute("default-value"),
                 "The documented default spec version changed; keep README/CHANGELOG in sync");
+        // Ties the documented default to the code path: whatever the descriptor declares must be a
+        // supported spec version, and today that is the CycloneDX 1.7 schema version.
+        assertEquals(org.cyclonedx.Version.VERSION_17,
+                SpecValidation.toCycloneDxVersion(specVersion.getAttribute("default-value")),
+                "the default specVersion must map to the CycloneDX 1.7 schema version");
     }
 
     @Test

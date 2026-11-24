@@ -154,9 +154,9 @@ public class AggregateSbomMojo extends AbstractMojo {
     private String outputExtension;
 
     /**
-     * Spec version to target (e.g., "1.3", "1.4", "1.5", "1.6", "1.7").
+     * Spec version to target (e.g., "1.3", "1.4", "1.5", "1.6", "1.7"). Default: "1.7", matching the default of the CycloneDX Maven plugin.
      */
-    @Parameter(property = "sbomAggregator.specVersion", defaultValue = "1.5")
+    @Parameter(property = "sbomAggregator.specVersion", defaultValue = "1.7")
     private String specVersion;
 
     /**
