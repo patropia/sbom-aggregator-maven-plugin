@@ -218,6 +218,37 @@ keeps its Maven parent and its Maven `dependsOn`, and also stays linked under th
 are added under the image, marked `sbomAggregator:inferredDependency=true`, and the image is listed with
 `aggregate: unknown` in `compositions` (spec 1.4+).
 
+### Standards conformance
+
+How the merged SBOM maps onto CycloneDX and SPDX:
+
+- **Matching across files uses the purl, not the `bom-ref`.** In CycloneDX a `bom-ref` is only unique inside one
+  document, so the same jar is usually `pkg:maven/...` in the Maven SBOM and a random id in a Syft/Trivy scan.
+  Components are matched by a canonical purl: type and qualifier keys are lowercased, namespace, name, version
+  and qualifier values are percent-decoded, qualifiers are sorted and empty qualifiers are dropped, and
+  `type=jar` is ignored for `pkg:maven` (while `classifier` is kept). Namespace and name are **not** lowercased,
+  because Maven coordinates are case-sensitive. Other qualifiers are kept, so `pkg:rpm/...?arch=x86_64` and
+  `?arch=aarch64` stay separate components. A component without a purl is matched by its
+  `group:name:version`, then by its original `bom-ref`; both indexes cover all input files, so it can merge with
+  a component from another SBOM too.
+- **Who decides `dependsOn`.** The project's own SBOM and dependency SBOMs (a `pkg:maven` `metadata.component`, or a
+  file the plugin resolved for a dependency) are authoritative for the `dependsOn` of every component they have a
+  `dependencies` entry for. Scans (`scanSboms`) never are; their edges *into* such a component (`image -> jar`) are
+  kept. A component that Maven only references as a child, without its own `dependencies` entry, keeps the scan's
+  `dependsOn`, because Maven said nothing about it.
+- **Hierarchy for unlinked components.** Components not reachable from the root are linked under their file's
+  `metadata.component`; for a dependency SBOM without one, under the dependency it was attached to; only otherwise
+  under the project root. Such links are marked `sbomAggregator:inferredDependency=true`, and from spec 1.4 the
+  anchoring component is listed in `compositions` as `{"aggregate": "unknown", "dependencies": [...]}`, the
+  CycloneDX way to say that its dependency list is not known to be complete.
+- **Containment vs. dependency.** Scanners express "the image contains this rpm/jar" as `dependsOn`, and the
+  merged CycloneDX output keeps that form (nested `components` would duplicate components already matched by
+  purl, and `dependencies` is what tools traverse). In the SPDX output an edge to an inferred component is written
+  as `CONTAINS` instead of `DEPENDS_ON`.
+- **SPDX 2.3 mapping.** `SPDXRef-DOCUMENT DESCRIBES` the root; nested components and inferred links become
+  `CONTAINS`; all other `dependencies` become `DEPENDS_ON`. CycloneDX `compositions` have no SPDX counterpart and
+  are dropped.
+
 ### Customizing Output Format
 
 You can control the format and classifier of the generated aggregated SBOM:

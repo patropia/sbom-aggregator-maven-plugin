@@ -38,6 +38,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -65,7 +66,12 @@ import java.util.TreeMap;
  *       {@code -2}, {@code -3}, ... suffix in document order, so the result is deterministic.</li>
  *   <li><b>Relationships:</b> {@code metadata.component} is {@code DESCRIBES}d by the document, nested
  *       components add {@code CONTAINS}, and each CycloneDX dependency entry becomes
- *       {@code DEPENDS_ON}. Self loops and references to unknown components are dropped.</li>
+ *       {@code DEPENDS_ON}. An edge whose target carries the merger's
+ *       {@code sbomAggregator:inferredDependency=true} property becomes {@code CONTAINS} instead: the merger
+ *       only added it because a scanner found the component inside that artifact (for example an rpm inside
+ *       a container image), which is containment rather than a declared dependency. Self loops and
+ *       references to unknown components are dropped. CycloneDX {@code compositions} have no SPDX 2.3
+ *       counterpart and are not represented.</li>
  *   <li><b>External references:</b> the purl becomes a {@code PACKAGE-MANAGER}/{@code purl} reference and
  *       the CPE a {@code SECURITY}/{@code cpe23Type} or {@code cpe22Type} reference. The
  *       {@code downloadLocation} uses a {@code distribution} (or {@code source-distribution}, then
@@ -306,6 +312,8 @@ final class SpdxConverter {
         private final List<Map<String, Object>> relationships = new ArrayList<>();
         private final Set<String> relationshipKeys = new LinkedHashSet<>();
         private final Map<String, String> idsByReference = new LinkedHashMap<>();
+        /** SPDX ids of components the merger linked by inference ({@code sbomAggregator:inferredDependency}). */
+        private final Set<String> inferredIds = new HashSet<>();
         private final Set<String> emitted = new LinkedHashSet<>();
         private final Map<String, String> extractedLicenses = new TreeMap<>();
         private final Set<String> usedIds = new LinkedHashSet<>();
@@ -363,6 +371,9 @@ final class SpdxConverter {
                 idsByReference.putIfAbsent(purl, id);
             }
             packages.add(packageFor(component, id));
+            if (isInferred(component)) {
+                inferredIds.add(id);
+            }
             if (parentId != null) {
                 relationship(parentId, "CONTAINS", id);
             }
@@ -399,9 +410,23 @@ final class SpdxConverter {
                     if (to == null || to.equals(from)) {
                         continue;
                     }
-                    relationship(from, "DEPENDS_ON", to);
+                    // an inferred link only says "found inside the scanned artifact", so it is containment
+                    relationship(from, inferredIds.contains(to) ? "CONTAINS" : "DEPENDS_ON", to);
                 }
             }
+        }
+
+        private static boolean isInferred(Component component) {
+            if (component.getProperties() == null) {
+                return false;
+            }
+            for (org.cyclonedx.model.Property property : component.getProperties()) {
+                if (property != null && SbomMerger.PROPERTY_INFERRED_DEPENDENCY.equals(property.getName())
+                        && "true".equalsIgnoreCase(trimToNull(property.getValue()))) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private void relationship(String from, String type, String to) {

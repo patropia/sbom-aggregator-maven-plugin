@@ -343,6 +343,7 @@ public class AggregateSbomMojo extends AbstractMojo {
 
         // 3. Parse BOMs using a content-based reader with a size guard
         List<Bom> boms = new ArrayList<>();
+        List<String> owners = new ArrayList<>();
         SbomInputReader reader = new SbomInputReader(maxSbomBytes);
 
         for (File file : sbomFilesToMerge) {
@@ -350,6 +351,7 @@ public class AggregateSbomMojo extends AbstractMojo {
                 Bom parsedBom = reader.read(file);
                 if (parsedBom != null) {
                     boms.add(parsedBom);
+                    owners.add(ownerPurl(fileToDep.get(file)));
                 }
             } catch (SbomInputReader.InvalidSbomException e) {
                 DepCoord owner = fileToDep.get(file);
@@ -388,6 +390,7 @@ public class AggregateSbomMojo extends AbstractMojo {
                 project.getVersion(),
                 specVersion,
                 boms,
+                owners,
                 scans,
                 missingSboms,
                 parseOutputTimestamp(outputTimestamp),
@@ -645,6 +648,19 @@ public class AggregateSbomMojo extends AbstractMojo {
             throw new MojoExecutionException("Invalid sbomAggregator.outputTimestamp '" + value
                     + "': expected ISO-8601 (e.g. 2024-01-01T00:00:00Z) or epoch seconds", e);
         }
+    }
+
+    /**
+     * Returns the Maven purl of the dependency an SBOM file was attached to, or {@code null} for the project's
+     * own SBOM. The merger uses it to anchor the components of a dependency SBOM without
+     * {@code metadata.component} under that dependency instead of under the project root.
+     */
+    static String ownerPurl(DepCoord owner) {
+        if (owner == null || owner.groupId == null || owner.artifactId == null || owner.version == null
+                || owner.groupId.isEmpty() || owner.artifactId.isEmpty() || owner.version.isEmpty()) {
+            return null;
+        }
+        return Purls.maven(owner.groupId, owner.artifactId, owner.version, null, null);
     }
 
     /**
