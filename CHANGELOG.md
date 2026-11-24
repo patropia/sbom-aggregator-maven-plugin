@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** the default `specVersion` (`sbomAggregator.specVersion`) is now `1.7` instead of `1.5`, matching
+  the default of the CycloneDX Maven plugin. Set `<specVersion>1.5</specVersion>` to keep the previous output.
 - A dependency SBOM without a usable `metadata.component` is now anchored under the dependency it was attached to
   (instead of the project root) and counts as a Maven SBOM for `dependsOn`. `SbomMerger.merge(...)` has a new
   overload taking the owner purl of each input.

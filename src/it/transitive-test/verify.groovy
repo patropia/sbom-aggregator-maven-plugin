@@ -10,7 +10,7 @@ def jsonSlurper = new JsonSlurper()
 def bom = jsonSlurper.parse(aggregatedBom)
 
 assert bom.bomFormat == "CycloneDX"
-assert bom.specVersion == "1.5"
+assert bom.specVersion == "1.7"
 
 // Verify root component metadata
 assert bom.metadata != null

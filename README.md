@@ -44,7 +44,7 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
                 <!-- Path to your project's base SBOM generated in an earlier stage -->
                 <projectSbom>${project.build.directory}/bom.json</projectSbom>
                 <!-- Target spec version for the merged output -->
-                <specVersion>1.5</specVersion>
+                <specVersion>1.7</specVersion>
                 <!-- Whether to fail the build if a collected dependency (direct, plus transitive when includeTransitive=true) lacks an SBOM -->
                 <failOnMissingSbom>false</failOnMissingSbom>
             </configuration>
@@ -73,7 +73,7 @@ Add the plugin to your project's `pom.xml` under the desired build lifecycle pha
 | `attach` | `sbomAggregator.attach` | `boolean` | `true` | Whether to attach the aggregated SBOM as a project artifact. |
 | `generateSpdx` | `sbomAggregator.generateSpdx` | `boolean` | `false` | Also write the aggregated SBOM as SPDX 2.3 JSON (`<outputName>.spdx.json`); attached with classifier `spdx` (type `json`) when `attach=true`. Vulnerabilities, services and compositions are not represented in SPDX. |
 | `skip` | `sbomAggregator.skip` | `boolean` | `false` | Skip execution of the plugin. |
-| `specVersion` | `sbomAggregator.specVersion` | `String` | `1.5` | Target CycloneDX specification version (`1.3`, `1.4`, `1.5`, `1.6`, `1.7`). |
+| `specVersion` | `sbomAggregator.specVersion` | `String` | `1.7` | Target CycloneDX specification version (`1.3`, `1.4`, `1.5`, `1.6`, `1.7`). |
 | `outputTimestamp` | `sbomAggregator.outputTimestamp` | `String` | `${project.build.outputTimestamp}` | ISO-8601 or epoch seconds; when set the plugin will use a fixed timestamp and derive a name-based urn:uuid serialNumber for reproducible outputs. |
 | `maxSbomSize` | `sbomAggregator.maxSbomSize` | `String` | `50MB` | Maximum size of each input SBOM file, in bytes or with a `KB`/`MB`/`GB` suffix; `0` means unlimited. Each file is held in memory while it is parsed. |
 | `failOnInvalidSbom` | `sbomAggregator.failOnInvalidSbom` | `boolean` | `true` | Fails the build when a dependency SBOM is not a valid CycloneDX JSON/XML document or exceeds `maxSbomSize`. When `false`, the dependency is reported as missing and a placeholder component is emitted. An invalid project SBOM always fails the build. |

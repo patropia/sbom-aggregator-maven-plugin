@@ -191,8 +191,9 @@ class OutputSchemaValidationTest {
     }
 
     @Test
-    void aggregatedBomWithVulnerabilitiesValidatesFor14To16() throws Exception {
-        String[][] versions = {{"1.4", "VERSION_14"}, {"1.5", "VERSION_15"}, {"1.6", "VERSION_16"}};
+    void aggregatedBomWithVulnerabilitiesValidatesFor14To17() throws Exception {
+        String[][] versions = {{"1.4", "VERSION_14"}, {"1.5", "VERSION_15"}, {"1.6", "VERSION_16"},
+                {"1.7", "VERSION_17"}};
         for (String[] v : versions) {
             Bom upstream = new Bom();
             Component lib = new Component();
@@ -230,9 +231,9 @@ class OutputSchemaValidationTest {
     }
 
     @Test
-    void mergedScanWithInferredAnchorsValidatesFor13To16() throws Exception {
+    void mergedScanWithInferredAnchorsValidatesFor13To17() throws Exception {
         String[][] versions = {{"1.3", "VERSION_13"}, {"1.4", "VERSION_14"}, {"1.5", "VERSION_15"},
-                {"1.6", "VERSION_16"}};
+                {"1.6", "VERSION_16"}, {"1.7", "VERSION_17"}};
         for (String[] v : versions) {
             Bom scan;
             try (java.io.InputStream in = getClass().getResourceAsStream("merger/scan-syft.json")) {
@@ -264,7 +265,7 @@ class OutputSchemaValidationTest {
         // M3 behaviour: the Maven SBOM decides the dependsOn of a component a scan also lists, while the
         // scan's own components are anchored under its metadata.component and flagged as inferred. The
         // resulting document (marker property + compositions + merged graph) must still be schema-valid.
-        String[][] versions = {{"1.5", "VERSION_15"}, {"1.6", "VERSION_16"}};
+        String[][] versions = {{"1.5", "VERSION_15"}, {"1.6", "VERSION_16"}, {"1.7", "VERSION_17"}};
         for (String[] v : versions) {
             Bom merged = SbomMerger.merge("com.acme", "root", "1.0.0", v[0],
                     new ArrayList<>(List.of(parseResource("maven-deps.json", "maven-" + v[0]),
