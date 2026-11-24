@@ -12,6 +12,7 @@ Use this checklist when preparing a new release of the SBOM Aggregator Maven Plu
 - [ ] CHANGELOG.md is updated with release notes for the new version
 - [ ] Version in `pom.xml` (the release workflow sets it from the tag, so a manual edit is optional)
 - [ ] README.md examples reference the correct version
+- [ ] `.github/ISSUE_TEMPLATE/bug_report.md` examples reference the correct version
 - [ ] All documentation is up to date
 
 ## Release Preparation
