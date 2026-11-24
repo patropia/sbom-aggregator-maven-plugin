@@ -229,7 +229,7 @@ class SbomMergerTest {
         // The project's own SBOM: metadata.component is the project itself, which depends on dep-1.
         Bom ownBom = parseBomResource(tempDir, "own.json");
 
-        // An upstream SBOM whose metadata.component must NOT become a child of the root.
+        // An upstream SBOM that the project's own SBOM does not reference: it is wired to the root.
         Bom upstream = parseBomResource(tempDir, "upstream.json");
 
         Bom merged = merge(Arrays.asList(upstream, ownBom), null);
@@ -242,8 +242,10 @@ class SbomMergerTest {
         assertNotNull(upstreamLib, "upstream metadata.component must be kept as a component");
         assertEquals(3, merged.getComponents().size());
 
-        assertEquals(Collections.singleton(dep1.getBomRef()), childrenOf(merged, ROOT_PURL),
-                "the root depends on the children of the project's own SBOM, not on itself");
+        assertEquals(new LinkedHashSet<>(Arrays.asList(dep1.getBomRef(), upstreamLib.getBomRef())),
+                new LinkedHashSet<>(childrenOf(merged, ROOT_PURL)),
+                "the root depends on the children of the project's own SBOM plus every upstream SBOM "
+                        + "that would otherwise be unreachable, not on itself");
         assertFalse(childrenOf(merged, ROOT_PURL).contains(ROOT_PURL));
         assertNoDanglingReferences(merged);
     }

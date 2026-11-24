@@ -230,6 +230,36 @@ class OutputSchemaValidationTest {
     }
 
     @Test
+    void mergedScanWithInferredAnchorsValidatesFor13To16() throws Exception {
+        String[][] versions = {{"1.3", "VERSION_13"}, {"1.4", "VERSION_14"}, {"1.5", "VERSION_15"},
+                {"1.6", "VERSION_16"}};
+        for (String[] v : versions) {
+            Bom scan;
+            try (java.io.InputStream in = getClass().getResourceAsStream("merger/scan-syft.json")) {
+                assertTrue(in != null, "missing test resource merger/scan-syft.json");
+                Path file = tempDir.resolve("scan-" + v[0] + ".json");
+                Files.write(file, in.readAllBytes());
+                scan = new org.cyclonedx.parsers.JsonParser().parse(file.toFile());
+            }
+            Bom merged = SbomMerger.merge("com.acme", "root", "1.0.0", v[0], List.of(scan), List.of(), null);
+
+            AggregateSbomMojo mojo = new AggregateSbomMojo();
+            mojo.setSpecVersion(v[0]);
+            mojo.setOutputExtension("json");
+            mojo.setValidateOutput(true);
+            File output = tempDir.resolve("scan-" + v[0] + "/aggregated-bom.json").toFile();
+            mojo.writeBomToFile(merged, output);
+            String written = Files.readString(output.toPath(), StandardCharsets.UTF_8);
+            assertTrue(written.contains(SbomMerger.PROPERTY_INFERRED_DEPENDENCY),
+                    "inferred-dependency marker must be serialised for " + v[0]);
+            assertEquals(!"1.3".equals(v[0]), written.contains("\"compositions\""),
+                    "compositions are expected from spec 1.4 onwards, got for " + v[0]);
+            AggregateSbomMojo.validateBomContent(written.getBytes(StandardCharsets.UTF_8), "json",
+                    Version.valueOf(v[1]), v[0]);
+        }
+    }
+
+    @Test
     void validationFailureLeavesNoFileBehind() {
         AggregateSbomMojo mojo = new AggregateSbomMojo();
         mojo.setSpecVersion("1.5");
