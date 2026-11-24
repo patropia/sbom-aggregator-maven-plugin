@@ -748,25 +748,33 @@ public final class SbomMerger {
             this.rootGav = rootGav;
             this.rootComponent = rootComponent;
             usedRefs.add(rootRef);
-            purlIndex.put(rootRef, rootRef);
+            purlIndex.put(Purls.matchKey(rootRef), rootRef);
             gavIndex.put(rootGav, rootRef);
         }
 
         /** Registers a component and returns the final bom-ref it was mapped to. */
         String register(Component component, Map<String, String> localMap) {
             String purl = component.getPurl();
+            if (isBlank(component.getGroup())) {
+                // Scanners (Syft, Trivy) often omit the group for jars; the Maven purl namespace is the groupId.
+                String groupId = Purls.mavenGroupId(purl);
+                if (!isBlank(groupId)) {
+                    component.setGroup(groupId);
+                }
+            }
+            String purlKey = Purls.canonicalKey(purl);
             String gav = gavOf(component);
             String originalRef = component.getBomRef();
 
             String existing = null;
-            if (!isBlank(purl)) {
-                existing = purlIndex.get(purl);
+            if (purlKey != null) {
+                existing = purlIndex.get(purlKey);
             }
             if (existing == null && gav != null) {
                 existing = gavIndex.get(gav);
             }
             if (existing == null && !isBlank(originalRef)) {
-                existing = purlIndex.get(originalRef);
+                existing = purlIndex.get(Purls.matchKey(originalRef));
                 if (existing == null) {
                     existing = gavIndex.get(originalRef);
                 }
@@ -790,8 +798,8 @@ public final class SbomMerger {
                 if (!isBlank(originalRef)) {
                     localMap.put(originalRef, existing);
                 }
-                if (!isBlank(purl)) {
-                    localMap.putIfAbsent(purl, existing);
+                if (purlKey != null) {
+                    localMap.putIfAbsent(purlKey, existing);
                 }
                 return existing;
             }
@@ -804,8 +812,8 @@ public final class SbomMerger {
             if (!isBlank(originalRef)) {
                 localMap.put(originalRef, finalRef);
             }
-            if (!isBlank(purl)) {
-                localMap.putIfAbsent(purl, finalRef);
+            if (purlKey != null) {
+                localMap.putIfAbsent(purlKey, finalRef);
             }
             localMap.putIfAbsent(finalRef, finalRef);
             return finalRef;
@@ -824,7 +832,7 @@ public final class SbomMerger {
                     missingDependency.getVersion(), null, null);
             String gav = missingDependency.toString();
 
-            String existing = purlIndex.get(purl);
+            String existing = purlIndex.get(Purls.matchKey(purl));
             if (existing == null) {
                 existing = gavIndex.get(gav);
             }
@@ -861,7 +869,12 @@ public final class SbomMerger {
             if (resolved != null) {
                 return resolved;
             }
-            resolved = purlIndex.get(reference);
+            String key = Purls.matchKey(reference);
+            resolved = localMap.get(key);
+            if (resolved != null) {
+                return resolved;
+            }
+            resolved = purlIndex.get(key);
             if (resolved != null) {
                 return resolved;
             }
@@ -956,9 +969,9 @@ public final class SbomMerger {
         }
 
         private void index(Component component, String ref) {
-            String purl = component.getPurl();
-            if (!isBlank(purl)) {
-                purlIndex.putIfAbsent(purl, ref);
+            String purlKey = Purls.canonicalKey(component.getPurl());
+            if (purlKey != null) {
+                purlIndex.putIfAbsent(purlKey, ref);
             }
             String gav = gavOf(component);
             if (gav != null) {
