@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Components of an input SBOM that cannot be reached from the root (typical for Syft/Trivy scans with empty or
+  partial `dependencies`) are now linked under that SBOM's `metadata.component` (or under the root when the SBOM
+  has none) instead of being left orphaned. Only orphans without a parent among the other orphans get a direct link,
+  so existing levels (e.g. `busybox -> jar`) are kept. Each linked component carries the property
+  `sbomAggregator:inferredDependency=true`, and from spec 1.4 the anchoring component is listed in the
+  `aggregate: unknown` composition. The project's own SBOM is not changed this way.
+- When the project's own SBOM is merged together with other SBOMs, every upstream `metadata.component` that is not
+  reachable through the project's own dependencies is now also a direct dependency of the root (previously such a
+  scan was unreachable).
+
 ### Fixed
 
 - Components are now matched on a canonical purl key (lowercased type, consistent percent-encoding, sorted
