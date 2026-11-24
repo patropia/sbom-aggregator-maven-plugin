@@ -101,7 +101,13 @@ class SbomMergerScanInputTest {
     }
 
     private static Component scanRoot(Bom bom, String name) {
-        return byName(bom, name).get(0);
+        List<Component> matches = byName(bom, name);
+        assertFalse(matches.isEmpty(), "no component named " + name + " in the merged SBOM");
+        return matches.get(0);
+    }
+
+    private static boolean hasDependencyEntry(Bom bom, String ref) {
+        return bom.getDependencies().stream().anyMatch(d -> ref.equals(d.getRef()));
     }
 
     @Test
@@ -147,27 +153,51 @@ class SbomMergerScanInputTest {
     }
 
     @Test
+    void danglingAndSelfReferencesOfScanAreDropped() throws Exception {
+        Bom bom = merge("scan-dangling.json");
+        String scanRef = scanRoot(bom, "app3").getBomRef();
+        String jarRef = byPurl(bom, JAR_PURL).getBomRef();
+
+        // a dependsOn entry without a matching component is dropped, not carried into the graph
+        assertEquals(Set.of(jarRef), childrenOf(bom, scanRef));
+        assertFalse(hasDependencyEntry(bom, "pkg:maven/org.example/ghost@9.9.9"));
+        assertFalse(childrenOf(bom, scanRef).contains("pkg:maven/org.example/ghost@9.9.9"));
+
+        // a dependency entry whose ref is not a known component is ignored entirely
+        assertFalse(hasDependencyEntry(bom, "pkg:maven/org.example/ghost-parent@9.9.9"));
+
+        // self-loops are removed
+        assertTrue(childrenOf(bom, jarRef).isEmpty());
+
+        // an edge back to the scan's own top-level component is kept as-is
+        assertEquals(Set.of(scanRef), childrenOf(bom, byPurl(bom, "pkg:generic/busybox@1.36.1").getBomRef()));
+    }
+
+    @Test
     void jarQualifierAndMissingGroupCauseDuplicate() throws Exception {
         Bom bom = merge("maven-deps.json", "scan-syft.json");
         assertEquals(2, byName(bom, "jackson-databind").size());
     }
 
     @Test
-    @Disabled("gap: match maven purls ignoring type=jar and fall back to purl namespace/name when group is missing")
+    @Disabled("gap: maven purls should be matched ignoring type=jar and falling back to the purl namespace/name "
+            + "when group is missing (currently: 2 jackson-databind components)")
     void jarFromScanShouldMergeWithMavenComponent() throws Exception {
         Bom bom = merge("maven-deps.json", "scan-syft.json");
         assertEquals(1, byName(bom, "jackson-databind").size());
     }
 
     @Test
-    @Disabled("gap: orphan components of a scan without dependencies should hang under the scan's metadata.component")
+    @Disabled("gap: components of a scan without dependencies should hang under the scan's metadata.component "
+            + "(currently: 0 children, all 4 components unreachable from the root)")
     void orphansShouldHangUnderScanRoot() throws Exception {
         Bom bom = merge("scan-no-deps.json");
         assertEquals(4, childrenOf(bom, scanRoot(bom, "app2").getBomRef()).size());
     }
 
     @Test
-    @Disabled("gap: every merged component should be reachable from the root")
+    @Disabled("gap: every merged component should be reachable from the root "
+            + "(currently: components the scan does not link, e.g. the aarch64 rpm, are unreachable)")
     void everyComponentReachableFromRoot() throws Exception {
         Bom bom = merge("scan-syft.json");
         Set<String> reachable = reachableFromRoot(bom);
