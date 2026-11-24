@@ -254,6 +254,28 @@ class SpdxConverterTest {
     }
 
     @Test
+    void inferredEdgesBecomeContains() throws Exception {
+        Bom bom = bomWithRoot();
+        Component image = component("img", "image", "1");
+        Component rpm = component("rpm", "bash", "5.1");
+        rpm.addProperty(new org.cyclonedx.model.Property(SbomMerger.PROPERTY_INFERRED_DEPENDENCY, "true"));
+        Component jar = component("jar", "jackson", "2");
+        bom.setComponents(new ArrayList<>(Arrays.asList(image, rpm, jar)));
+        Dependency root = new Dependency("root");
+        root.addDependency(new Dependency("img"));
+        Dependency img = new Dependency("img");
+        img.addDependency(new Dependency("rpm"));
+        img.addDependency(new Dependency("jar"));
+        bom.setDependencies(new ArrayList<>(Arrays.asList(root, img)));
+
+        Set<String> rels = relationships(convert(bom));
+        assertTrue(rels.contains("SPDXRef-img CONTAINS SPDXRef-rpm"), rels.toString());
+        assertFalse(rels.contains("SPDXRef-img DEPENDS_ON SPDXRef-rpm"));
+        assertTrue(rels.contains("SPDXRef-img DEPENDS_ON SPDXRef-jar"));
+        assertTrue(rels.contains("SPDXRef-root DEPENDS_ON SPDXRef-img"));
+    }
+
+    @Test
     void dependenciesBecomeDependsOnWithoutSelfLoopsUnknownRefsOrDuplicates() throws Exception {
         Bom bom = bomWithRoot();
         bom.setComponents(new ArrayList<>(Arrays.asList(component("a", "a", "1"), component("b", "b", "1"))));

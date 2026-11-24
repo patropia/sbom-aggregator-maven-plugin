@@ -119,6 +119,15 @@ class PurlsTest {
     }
 
     @Test
+    void canonicalKeyKeepsNamespaceAndNameCase() {
+        // README "Standards conformance": only the type and the qualifier keys are lowercased, because Maven
+        // coordinates are case-sensitive
+        String canonical = Purls.canonicalKey("pkg:maven/Com.ACME/Lib@1.0.0");
+        assertEquals("pkg:maven/Com.ACME/Lib@1.0.0", canonical);
+        assertNotEquals(canonical, Purls.canonicalKey("pkg:maven/com.acme/lib@1.0.0"));
+    }
+
+    @Test
     void canonicalKeyOfNonPurlIsNull() {
         assertNull(Purls.canonicalKey(null));
         assertNull(Purls.canonicalKey("rpm-x86"));
