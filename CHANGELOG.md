@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-25
+
 ### Added
 
 - Integration tests `version-divergence-test` (a `dependencyManagement` override makes Maven resolve a different
@@ -43,8 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A missing dependency that another input already describes as a component now carries the
   `sbomAggregator:missingSbom=true` property; previously only newly created placeholders were marked.
 - A dependency the project declares directly and that has no SBOM stays a direct child of the root even when another
-  SBOM also lists it (`root -> [A, D]` with `A -> D`, instead of only `root -> A -> D`). Compared to the previous
-  unreleased change, the root's `dependsOn` again lists such declared dependencies.
+  SBOM also lists it (`root -> [A, D]` with `A -> D`, instead of only `root -> A -> D`). As in 1.4.0, the root's
+  `dependsOn` lists such declared dependencies.
 
 ## [1.4.0] - 2026-11-24
 
@@ -291,7 +293,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Uses Eclipse Aether for artifact resolution
 - Powered by CycloneDX Core Java library for SBOM parsing and generation
 
-[Unreleased]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/patropia/sbom-aggregator-maven-plugin/compare/v1.1.0...v1.2.0
