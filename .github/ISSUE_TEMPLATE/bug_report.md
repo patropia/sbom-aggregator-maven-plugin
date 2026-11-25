@@ -26,7 +26,7 @@ What actually happened.
 
 ## Environment
 
-- **Plugin Version**: [e.g., 1.4.0]
+- **Plugin Version**: [e.g., 1.5.0]
 - **Java Version**: [e.g., 17.0.8]
 - **Maven Version**: [e.g., 3.9.6]
 - **Operating System**: [e.g., Ubuntu 22.04, macOS 14, Windows 11]
@@ -38,7 +38,7 @@ What actually happened.
 <plugin>
     <groupId>nl.patropia.maven.plugin</groupId>
     <artifactId>sbom-aggregator-maven-plugin</artifactId>
-    <version>1.4.0</version>
+    <version>1.5.0</version>
     <configuration>
         <!-- Your configuration here -->
     </configuration>
