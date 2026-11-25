@@ -336,7 +336,7 @@ public class AggregateSbomMojo extends AbstractMojo {
 
             if (!resolved) {
                 missingSboms.add(new SbomMerger.MissingDependency(
-                        dep.groupId, dep.artifactId, dep.version));
+                        dep.groupId, dep.artifactId, dep.version, dep.direct, dep.trail));
                 getLog().warn("MISSING SBOM: Could not resolve attached SBOM for dependency [" + depId + "]");
             }
         }
@@ -360,7 +360,8 @@ public class AggregateSbomMojo extends AbstractMojo {
                     throw new MojoExecutionException(e.getMessage(), e);
                 }
                 getLog().warn(e.getMessage());
-                missingSboms.add(new SbomMerger.MissingDependency(owner.groupId, owner.artifactId, owner.version));
+                missingSboms.add(new SbomMerger.MissingDependency(owner.groupId, owner.artifactId, owner.version,
+                        owner.direct, owner.trail));
             }
         }
 
@@ -506,13 +507,23 @@ public class AggregateSbomMojo extends AbstractMojo {
         LinkedHashMap<String, DepCoord> map = new LinkedHashMap<>();
 
         if (includeTransitive) {
-            // Use the project's resolved artifacts
+            // Use the project's resolved artifacts; the dependency trail tells direct from transitive
+            java.util.Set<String> declared = new java.util.HashSet<>();
+            for (org.apache.maven.model.Dependency d : project.getDependencies()) {
+                declared.add(d.getGroupId() + ":" + d.getArtifactId());
+            }
             for (org.apache.maven.artifact.Artifact a : project.getArtifacts()) {
-                addCoord(map, a.getGroupId(), a.getArtifactId(), a.getVersion(), a.getScope(), scopesToUse, excludePatterns);
+                List<String> trail = a.getDependencyTrail();
+                boolean direct = trail != null && !trail.isEmpty()
+                        ? trail.size() <= 2
+                        : declared.contains(a.getGroupId() + ":" + a.getArtifactId());
+                addCoord(map, a.getGroupId(), a.getArtifactId(), a.getVersion(), a.getScope(), scopesToUse,
+                        excludePatterns, direct, trail);
             }
         } else {
             for (org.apache.maven.model.Dependency d : project.getDependencies()) {
-                addCoord(map, d.getGroupId(), d.getArtifactId(), d.getVersion(), d.getScope(), scopesToUse, excludePatterns);
+                addCoord(map, d.getGroupId(), d.getArtifactId(), d.getVersion(), d.getScope(), scopesToUse,
+                        excludePatterns, true, null);
             }
         }
 
@@ -527,7 +538,7 @@ public class AggregateSbomMojo extends AbstractMojo {
      */
     private static void addCoord(LinkedHashMap<String, DepCoord> map, String groupId, String artifactId,
                                  String version, String scope, List<String> scopesToUse,
-                                 List<Pattern> excludePatterns) {
+                                 List<Pattern> excludePatterns, boolean direct, List<String> trail) {
         String effectiveScope = scope == null ? "compile" : scope;
         if (!scopesToUse.contains(effectiveScope)) {
             return;
@@ -539,7 +550,7 @@ public class AggregateSbomMojo extends AbstractMojo {
             }
         }
         map.putIfAbsent(groupId + ":" + artifactId + ":" + version,
-                new DepCoord(groupId, artifactId, version, effectiveScope));
+                new DepCoord(groupId, artifactId, version, effectiveScope, direct, trail));
     }
 
     static class DepCoord {
@@ -547,12 +558,23 @@ public class AggregateSbomMojo extends AbstractMojo {
         final String artifactId;
         final String version;
         final String scope;
+        /** Whether the project declares this dependency itself (as opposed to Maven resolving it transitively). */
+        final boolean direct;
+        /** Maven's dependency trail (project first, this artifact last), or {@code null} when unknown. */
+        final List<String> trail;
 
         DepCoord(String groupId, String artifactId, String version, String scope) {
+            this(groupId, artifactId, version, scope, true, null);
+        }
+
+        DepCoord(String groupId, String artifactId, String version, String scope,
+                 boolean direct, List<String> trail) {
             this.groupId = groupId;
             this.artifactId = artifactId;
             this.version = version;
             this.scope = scope;
+            this.direct = direct;
+            this.trail = trail;
         }
     }
 

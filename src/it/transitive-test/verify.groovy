@@ -27,8 +27,21 @@ assert foundA : "Missing marker-from-lib-a"
 assert foundB : "Missing marker-from-lib-b"
 
 // Verify placeholder for lib-c exists (missing SBOM)
-boolean foundLibC = bom.components.any { it.purl == "pkg:maven/it.transitive/lib-c@1.0.0" }
-assert foundLibC : "Missing placeholder component for it.transitive:lib-c:1.0.0"
+def libCComponent = bom.components.find { it.purl == "pkg:maven/it.transitive/lib-c@1.0.0" }
+assert libCComponent : "Missing placeholder component for it.transitive:lib-c:1.0.0"
+
+// Verify the placeholder records where it came from: lib-c is transitive (reached through lib-a), so Maven's
+// dependency trail must start at this project and end at lib-c, with lib-a in between
+def libCProperties = (libCComponent.properties ?: []).collectEntries { [(it.name): it.value] }
+assert libCProperties["sbomAggregator:missingSbom"] == "true" : "lib-c placeholder must be marked missingSbom=true"
+assert libCProperties["sbomAggregator:direct"] == "false" : "lib-c is resolved transitively through lib-a, so it must not be marked as a direct dependency (was: ${libCProperties["sbomAggregator:direct"]})"
+String libCTrail = libCProperties["sbomAggregator:dependencyTrail"]
+assert libCTrail : "lib-c placeholder must record its Maven dependency trail"
+List libCTrailEntries = libCTrail.split(" -> ") as List
+assert libCTrailEntries.size() >= 3 : "lib-c trail must show at least project -> lib-a -> lib-c, was: ${libCTrail}"
+assert libCTrailEntries.first().startsWith("nl.patropia.maven.it:transitive-test:") : "trail must start at the aggregating project, was: ${libCTrail}"
+assert libCTrailEntries.last().startsWith("it.transitive:lib-c:") : "trail must end at the dependency itself, was: ${libCTrail}"
+assert libCTrailEntries.any { it.startsWith("it.transitive:lib-a:") } : "trail must list the intermediate dependency lib-a, was: ${libCTrail}"
 
 // Verify excluded and test-scoped artifacts are absent
 boolean foundX = bom.components.any { it.name == "marker-from-lib-x" }

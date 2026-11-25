@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Missing-SBOM placeholders now record their Maven provenance: `sbomAggregator:direct=true|false` (whether the
+  project declares the dependency itself) and `sbomAggregator:dependencyTrail` (Maven's dependency trail, project
+  first, joined by ` -> `). `SbomMerger.MissingDependency` has a new constructor taking `direct` and `trail`; the
+  existing three-argument constructor is kept and means "not direct, trail unknown".
+
 ### Changed
 
 - A dependency without an SBOM (`failOnMissingSbom=false`) is now wired as a direct child of the root only when it is
@@ -19,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A missing dependency that another input already describes as a component now carries the
   `sbomAggregator:missingSbom=true` property; previously only newly created placeholders were marked.
+- A dependency the project declares directly and that has no SBOM stays a direct child of the root even when another
+  SBOM also lists it (`root -> [A, D]` with `A -> D`, instead of only `root -> A -> D`). Compared to the previous
+  unreleased change, the root's `dependsOn` again lists such declared dependencies.
 
 ## [1.4.0] - 2026-11-24
 
