@@ -334,8 +334,74 @@ class SbomMergerProvenanceTest {
                 .filter(p -> SbomMerger.PROPERTY_DEPENDENCY_TRAIL.equals(p.getName())).count());
         assertEquals(1, placeholder.getProperties().stream()
                 .filter(p -> SbomMerger.PROPERTY_MISSING_SBOM.equals(p.getName())).count());
-        // unreachable through any SBOM (B has none), so it is still wired to the root
-        assertTrue(children(merged, ROOT).contains(cRef));
+        // B has no SBOM of its own but A's SBOM lists it, so C is wired under its trail parent B, not the root
+        assertTrue(children(merged, refByPurl(merged, B)).contains(cRef));
+        assertFalse(children(merged, ROOT).contains(cRef));
+    }
+
+    @Test
+    void transitivePlaceholderFallsBackToRootWhenNoTrailAncestorIsPresent() throws Exception {
+        Bom own = bom(comp("root", ROOT), List.of(comp("a", A)), List.of(dep("root", "a"), dep("a")));
+        List<String> trail = List.of("com.acme:root:pom:1.0.0", "com.acme:x:jar:1.0.0", "com.acme:c:jar:1.0.0");
+        SbomMerger.MissingDependency c = new SbomMerger.MissingDependency("com.acme", "c", "1.0.0", false, trail);
+
+        Bom merged = merge(List.of(own), List.of(c));
+
+        assertGraphInvariants(merged);
+        assertTrue(children(merged, ROOT).contains(refByPurl(merged, C)), "R4 fallback: no ancestor present");
+    }
+
+    @Test
+    void unreachedTransitivePlaceholderIsWiredUnderItsTrailParent() throws Exception {
+        // mirrors src/it/provenance-graph-test: root -> A -> B -> C and root -> D -> B, C has no SBOM
+        Bom own = bom(comp("root", ROOT), List.of(comp("a", A), comp("d", D)),
+                List.of(dep("root", "a", "d"), dep("a"), dep("d")));
+        Bom aBom = bom(comp("self", A), List.of(comp("b", B)), List.of(dep("self", "b"), dep("b")));
+        Bom dBom = bom(comp("self", D), List.of(comp("b", B)), List.of(dep("self", "b"), dep("b")));
+        Bom bBom = bom(comp("self", B), List.of(), List.of(dep("self")));
+        List<String> trail = List.of("com.acme:root:pom:1.0.0", "com.acme:a:jar:1.0.0", "com.acme:b:jar:1.0.0",
+                "com.acme:c:jar:1.0.0");
+        SbomMerger.MissingDependency c = new SbomMerger.MissingDependency("com.acme", "c", "1.0.0", false, trail);
+
+        Bom merged = merge(Arrays.asList(own, aBom, dBom, bBom), List.of(c));
+
+        assertGraphInvariants(merged);
+        String bRef = refByPurl(merged, B);
+        String cRef = refByPurl(merged, C);
+        assertTrue(children(merged, bRef).contains(cRef), "C must hang under its trail parent B");
+        assertFalse(children(merged, ROOT).contains(cRef), "C must not be flattened onto the root");
+        assertFalse(children(merged, ROOT).contains(bRef), "B is transitive and must not be a direct child");
+        assertTrue(children(merged, refByPurl(merged, A)).contains(bRef));
+        assertTrue(children(merged, refByPurl(merged, D)).contains(bRef));
+    }
+
+    @Test
+    void chainOfTransitivePlaceholdersIsWiredShortestTrailFirst() throws Exception {
+        // root -> A, and both A -> B and B -> C are missing: B's trail parent is A (a listed component),
+        // C's trail parent is the B placeholder itself, which is only wired once B has been handled
+        Bom own = bom(comp("root", ROOT), List.of(comp("a", A)), List.of(dep("root", "a"), dep("a")));
+        List<String> bTrail = List.of("com.acme:root:pom:1.0.0", "com.acme:a:jar:1.0.0",
+                "com.acme:b:jar:1.0.0");
+        List<String> cTrail = List.of("com.acme:root:pom:1.0.0", "com.acme:a:jar:1.0.0",
+                "com.acme:b:jar:1.0.0", "com.acme:c:jar:1.0.0");
+        // deliberately supplied deepest first: the merger must sort by trail length, not by input order
+        List<SbomMerger.MissingDependency> missing = List.of(
+                new SbomMerger.MissingDependency("com.acme", "c", "1.0.0", false, cTrail),
+                new SbomMerger.MissingDependency("com.acme", "b", "1.0.0", false, bTrail));
+
+        Bom merged = merge(List.of(own), missing);
+
+        assertGraphInvariants(merged);
+        String a = refByPurl(merged, A);
+        String b = refByPurl(merged, B);
+        String c = refByPurl(merged, C);
+        assertTrue(children(merged, a).contains(b), "B must hang under its trail parent A");
+        assertTrue(children(merged, b).contains(c),
+                "C must hang under the B placeholder, whose trail passes through it");
+        assertFalse(children(merged, ROOT).contains(b), "B must not be flattened onto the root");
+        assertFalse(children(merged, ROOT).contains(c), "C must not be flattened onto the root");
+        assertTrue(hasProperty(component(merged, b), SbomMerger.PROPERTY_MISSING_SBOM, "true"));
+        assertTrue(hasProperty(component(merged, c), SbomMerger.PROPERTY_MISSING_SBOM, "true"));
     }
 
     @Test
