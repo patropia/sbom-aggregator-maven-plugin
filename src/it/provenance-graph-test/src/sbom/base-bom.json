@@ -1,0 +1,44 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:maven/nl.patropia.maven.it/provenance-graph-test@1.0.0-SNAPSHOT",
+      "group": "nl.patropia.maven.it",
+      "name": "provenance-graph-test",
+      "version": "1.0.0-SNAPSHOT",
+      "purl": "pkg:maven/nl.patropia.maven.it/provenance-graph-test@1.0.0-SNAPSHOT"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:maven/it.prov/lib-a@1.0.0",
+      "group": "it.prov",
+      "name": "lib-a",
+      "version": "1.0.0",
+      "purl": "pkg:maven/it.prov/lib-a@1.0.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:maven/it.prov/lib-d@1.0.0",
+      "group": "it.prov",
+      "name": "lib-d",
+      "version": "1.0.0",
+      "purl": "pkg:maven/it.prov/lib-d@1.0.0"
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:maven/nl.patropia.maven.it/provenance-graph-test@1.0.0-SNAPSHOT",
+      "dependsOn": [
+        "pkg:maven/it.prov/lib-a@1.0.0",
+        "pkg:maven/it.prov/lib-d@1.0.0"
+      ]
+    },
+    { "ref": "pkg:maven/it.prov/lib-a@1.0.0" },
+    { "ref": "pkg:maven/it.prov/lib-d@1.0.0" }
+  ]
+}

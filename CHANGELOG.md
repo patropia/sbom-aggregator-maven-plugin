@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Integration tests `version-divergence-test` (a `dependencyManagement` override makes Maven resolve a different
+  version than a dependency SBOM lists) and `provenance-graph-test` (multi-hop `A -> B -> C`, diamond on `B`, missing
+  transitive SBOM) assert the aggregated graph: referential integrity, unique bom-refs, reachability of every
+  component from `metadata.component`, and the provenance properties. README documents the provenance properties.
 - Version-mediation divergence is flagged: a Maven component listed by a dependency SBOM whose `groupId:artifactId`
   Maven resolved at a different version (mediation, `dependencyManagement`/BOM overrides) gets
   `sbomAggregator:mavenResolvedVersion=<resolved version>` and `sbomAggregator:versionDivergence=true`, and the
@@ -29,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A transitive missing-SBOM placeholder that no dependency SBOM lists is now linked under the nearest ancestor from
+  its Maven dependency trail that is present in the aggregated SBOM, instead of directly under the root. The root is
+  only used when no trail ancestor is present.
 - A missing dependency that another input already describes as a component now carries the
   `sbomAggregator:missingSbom=true` property; previously only newly created placeholders were marked.
 - A dependency the project declares directly and that has no SBOM stays a direct child of the root even when another
