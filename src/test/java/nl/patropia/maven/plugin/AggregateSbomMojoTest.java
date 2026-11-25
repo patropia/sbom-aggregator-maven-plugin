@@ -373,4 +373,54 @@ class AggregateSbomMojoTest {
         mojo.setScanSboms(Arrays.asList(tempDir.resolve("a.json").toFile(), null));
         mojo.warnDuplicateScanInputs(Arrays.asList(tempDir.resolve("a.json").toFile()));
     }
+
+    @Test
+    void collectDependencyCoordsMarksDirectDependenciesFromTheTrail() throws Exception {
+        MavenProject project = new MavenProject();
+        project.setGroupId("com.acme");
+        project.setArtifactId("root");
+        project.setVersion("1.0.0");
+        org.apache.maven.artifact.Artifact direct = artifact("com.acme", "a", "1.0.0",
+                Arrays.asList("com.acme:root:jar:1.0.0", "com.acme:a:jar:1.0.0"));
+        org.apache.maven.artifact.Artifact transitive = artifact("com.acme", "b", "1.0.0",
+                Arrays.asList("com.acme:root:jar:1.0.0", "com.acme:a:jar:1.0.0", "com.acme:b:jar:1.0.0"));
+        org.apache.maven.artifact.Artifact noTrailDeclared = artifact("com.acme", "c", "1.0.0", null);
+        org.apache.maven.artifact.Artifact noTrailUndeclared = artifact("com.acme", "e", "1.0.0", null);
+        project.setArtifacts(new java.util.LinkedHashSet<>(
+                Arrays.asList(direct, transitive, noTrailDeclared, noTrailUndeclared)));
+        org.apache.maven.model.Dependency declaredC = new org.apache.maven.model.Dependency();
+        declaredC.setGroupId("com.acme");
+        declaredC.setArtifactId("c");
+        declaredC.setVersion("1.0.0");
+        project.setDependencies(Collections.singletonList(declaredC));
+
+        AggregateSbomMojo mojo = new AggregateSbomMojo();
+        java.lang.reflect.Field field = AggregateSbomMojo.class.getDeclaredField("project");
+        field.setAccessible(true);
+        field.set(mojo, project);
+
+        mojo.setIncludeTransitive(true);
+        java.util.Map<String, AggregateSbomMojo.DepCoord> byArtifact = new java.util.HashMap<>();
+        for (AggregateSbomMojo.DepCoord coord : mojo.collectDependencyCoords()) {
+            byArtifact.put(coord.artifactId, coord);
+        }
+        assertEquals(4, byArtifact.size());
+        assertTrue(byArtifact.get("a").direct, "trail of length 2 is a direct dependency");
+        assertFalse(byArtifact.get("b").direct, "trail of length 3 is a transitive dependency");
+        assertEquals(3, byArtifact.get("b").trail.size());
+        assertTrue(byArtifact.get("c").direct, "without a trail a declared dependency is direct");
+        assertFalse(byArtifact.get("e").direct, "without a trail an undeclared dependency is transitive");
+
+        mojo.setIncludeTransitive(false);
+        List<AggregateSbomMojo.DepCoord> declaredOnly = mojo.collectDependencyCoords();
+        assertEquals(1, declaredOnly.size());
+        assertTrue(declaredOnly.stream().allMatch(c -> c.direct), "includeTransitive=false: everything is direct");
+    }
+
+    private static org.apache.maven.artifact.Artifact artifact(String g, String a, String v, List<String> trail) {
+        org.apache.maven.artifact.DefaultArtifact artifact = new org.apache.maven.artifact.DefaultArtifact(
+                g, a, v, "compile", "jar", null, new org.apache.maven.artifact.handler.DefaultArtifactHandler("jar"));
+        artifact.setDependencyTrail(trail);
+        return artifact;
+    }
 }
