@@ -240,6 +240,15 @@ Versions, bom-refs and `dependsOn` edges are never rewritten: a component the de
 - Libraries Maven never resolved (for example code shaded into a jar) are never flagged.
 - The comparison is exact text, so `1.0` and `1.0.0` count as different.
 
+The project's own SBOM (`projectSbom`) is always treated as the root's BOM. When its `metadata.component` has no
+`purl` and either no complete GAV or the project's GAV (for example a hand-written SBOM with only a `name` and a local
+`bom-ref`), that component is merged into the root: its local `bom-ref` becomes an alias of the root, its root
+`dependencies` entry becomes the root's `dependsOn`, its metadata (description, licenses) is copied, and no extra
+project component is emitted. If it declares no root dependencies, its components are linked under the root. A
+`metadata.component` with a `purl` or a complete GAV of a *different* project is treated as that project's SBOM: the
+component is kept and linked under the root, and the SBOM's components hang under it (for example a purl whose
+groupId differs from the project's, as in the `multi-dependency-test` integration test).
+
 Known gaps in the hierarchy:
 
 - Without `projectSbom`, each dependency SBOM's top component is linked directly under the root.
@@ -247,10 +256,6 @@ Known gaps in the hierarchy:
   the aggregated SBOM (the trail still records the real path). Trail entries are matched by
   `groupId:artifactId:version`, so a classifier-qualified entry such as `g:a:jar:tests:1.0` resolves to the plain
   `g:a@1.0` component as its parent.
-- A `projectSbom` whose `metadata.component` has neither a `bom-ref` nor a `purl` is not recognised as the project
-  itself: the project then appears as an extra component and every dependency SBOM's top component is linked directly
-  under the root. Give the project SBOM's `metadata.component` the project's Maven purl (as `cyclonedx-maven-plugin`
-  does) to avoid this.
 
 ### Standards conformance
 
