@@ -104,9 +104,12 @@ import org.cyclonedx.model.OrganizationalEntity;
  *       are then anchored under that dependency instead of the root, and the input counts as a Maven SBOM.</li>
  *   <li><b>Missing dependencies:</b> each {@link MissingDependency} without an upstream SBOM is
  *       emitted as a {@code LIBRARY} placeholder whose bom-ref and purl are
- *       {@code pkg:maven/groupId/artifactId@version}. Placeholders are wired to the root only when not
- *       otherwise reachable: a missing dependency that an upstream SBOM already lists as a child of
- *       another component keeps that parent and is not also made a direct dependency of the root. When
+ *       {@code pkg:maven/groupId/artifactId@version}. A placeholder for a dependency the project declares
+ *       directly ({@link MissingDependency#isDirect()}) is always a direct child of the root. Other
+ *       placeholders are wired to the root only when not otherwise reachable: a transitive missing
+ *       dependency that an upstream SBOM already lists as a child of another component keeps that parent
+ *       and is not also made a direct dependency of the root. Placeholders record their provenance in the
+ *       {@code sbomAggregator:direct} and {@code sbomAggregator:dependencyTrail} properties. When
  *       the missing dependency is already described as a component by another input, that component
  *       gets the {@code sbomAggregator:missingSbom=true} marker instead of a separate placeholder.</li>
  *   <li><b>Dangling/self references:</b> references that cannot be resolved to a known component
@@ -136,6 +139,20 @@ public final class SbomMerger {
      * always {@code true}.
      */
     public static final String PROPERTY_MISSING_SBOM = "sbomAggregator:missingSbom";
+
+    /**
+     * Property on a missing-SBOM placeholder recording how Maven reached the dependency: the entries of
+     * {@code Artifact.getDependencyTrail()} (project first, the dependency itself last) joined by
+     * {@code " -> "}. Only written when the trail has more than one entry.
+     */
+    public static final String PROPERTY_DEPENDENCY_TRAIL = "sbomAggregator:dependencyTrail";
+
+    /**
+     * Property on a missing-SBOM placeholder telling whether the project declares the dependency directly
+     * ({@code true}) or Maven resolved it transitively ({@code false}). Only written when provenance is known
+     * (the {@link MissingDependency} carries a trail or is marked direct).
+     */
+    public static final String PROPERTY_DIRECT_DEPENDENCY = "sbomAggregator:direct";
 
     /**
      * Property set on a component that was not reachable through its input SBOM's dependency graph and was
@@ -175,11 +192,41 @@ public final class SbomMerger {
         private final String groupId;
         private final String artifactId;
         private final String version;
+        private final boolean direct;
+        private final List<String> trail;
 
+        /**
+         * Creates a missing dependency without provenance information: it is treated as not direct and has no
+         * trail, so its placeholder is wired to the root only when nothing else reaches it.
+         */
         public MissingDependency(String groupId, String artifactId, String version) {
+            this(groupId, artifactId, version, false, null);
+        }
+
+        /**
+         * @param direct {@code true} when the project declares this dependency itself; its placeholder is then
+         *               always a direct child of the root, even when an upstream SBOM also lists it
+         * @param trail  the Maven dependency trail from the project to this artifact (as {@code Artifact.getId()}
+         *               strings, project first, artifact last), or {@code null} when unknown
+         */
+        public MissingDependency(String groupId, String artifactId, String version,
+                                 boolean direct, List<String> trail) {
             this.groupId = groupId;
             this.artifactId = artifactId;
             this.version = version;
+            this.direct = direct;
+            this.trail = trail == null ? Collections.emptyList()
+                    : Collections.unmodifiableList(new ArrayList<>(trail));
+        }
+
+        /** @return whether the project declares this dependency directly. */
+        public boolean isDirect() {
+            return direct;
+        }
+
+        /** @return the immutable dependency trail (project first, artifact last); empty when unknown. */
+        public List<String> getTrail() {
+            return trail;
         }
 
         public String groupId() {
@@ -397,10 +444,14 @@ public final class SbomMerger {
 
         // 2. placeholders for dependencies without an SBOM
         Set<String> placeholderRefs = new LinkedHashSet<>();
+        Set<String> directPlaceholderRefs = new LinkedHashSet<>();
         for (MissingDependency missingDependency : missing) {
             String ref = state.registerPlaceholder(missingDependency);
             if (ref != null) {
                 placeholderRefs.add(ref);
+                if (missingDependency.isDirect()) {
+                    directPlaceholderRefs.add(ref);
+                }
             }
         }
 
@@ -528,13 +579,21 @@ public final class SbomMerger {
             }
         }
 
-        // 4c. placeholders are wired to the root only when not otherwise reachable: a dependency without an
-        // SBOM that an upstream SBOM already lists (e.g. root -> A -> B -> C with C missing) keeps its real
+        // 4c. placeholders of dependencies the project declares directly are always direct children of the
+        // root; other placeholders are wired to the root only when not otherwise reachable: a dependency without
+        // an SBOM that an upstream SBOM already lists (e.g. root -> A -> B -> C with C missing) keeps its real
         // parent and is not flattened into a direct dependency of the project
         Set<String> rootDirect = graph.get(rootRef);
         Set<String> reachedFromRoot = reachable(graph, rootRef);
         for (String placeholderRef : placeholderRefs) {
-            if (!placeholderRef.equals(rootRef) && !reachedFromRoot.contains(placeholderRef)) {
+            if (placeholderRef.equals(rootRef)) {
+                continue;
+            }
+            if (directPlaceholderRefs.contains(placeholderRef)) {
+                if (rootDirect.add(placeholderRef)) {
+                    reachedFromRoot.addAll(reachable(graph, placeholderRef));
+                }
+            } else if (!reachedFromRoot.contains(placeholderRef)) {
                 rootDirect.add(placeholderRef);
                 reachedFromRoot.addAll(reachable(graph, placeholderRef));
             }
@@ -1081,6 +1140,28 @@ public final class SbomMerger {
             return finalRef;
         }
 
+        /**
+         * Adds the {@code sbomAggregator:direct} and {@code sbomAggregator:dependencyTrail} properties when the
+         * missing dependency carries provenance; existing properties of the same name are kept as they are.
+         */
+        private void addProvenance(List<Property> properties, MissingDependency missingDependency) {
+            List<String> trail = missingDependency.getTrail();
+            if (missingDependency.isDirect() || !trail.isEmpty()) {
+                addPropertyIfAbsent(properties, PROPERTY_DIRECT_DEPENDENCY,
+                        Boolean.toString(missingDependency.isDirect()));
+            }
+            if (trail.size() > 1) {
+                addPropertyIfAbsent(properties, PROPERTY_DEPENDENCY_TRAIL, String.join(" -> ", trail));
+            }
+        }
+
+        private void addPropertyIfAbsent(List<Property> properties, String name, String value) {
+            boolean present = properties.stream().anyMatch(p -> p != null && name.equals(p.getName()));
+            if (!present) {
+                properties.add(new Property(name, value));
+            }
+        }
+
         /** Adds a placeholder component for a dependency without an SBOM and returns its bom-ref. */
         String registerPlaceholder(MissingDependency missingDependency) {
             if (missingDependency == null
@@ -1104,12 +1185,9 @@ public final class SbomMerger {
                 if (component != null) {
                     List<Property> properties = component.getProperties() == null
                             ? new ArrayList<>() : new ArrayList<>(component.getProperties());
-                    boolean marked = properties.stream()
-                            .anyMatch(p -> p != null && PROPERTY_MISSING_SBOM.equals(p.getName()));
-                    if (!marked) {
-                        properties.add(new Property(PROPERTY_MISSING_SBOM, "true"));
-                        component.setProperties(properties);
-                    }
+                    addPropertyIfAbsent(properties, PROPERTY_MISSING_SBOM, "true");
+                    addProvenance(properties, missingDependency);
+                    component.setProperties(properties);
                 }
                 return existing;
             }
@@ -1123,6 +1201,7 @@ public final class SbomMerger {
             placeholder.setBomRef(purl);
             List<Property> properties = new ArrayList<>();
             properties.add(new Property(PROPERTY_MISSING_SBOM, "true"));
+            addProvenance(properties, missingDependency);
             placeholder.setProperties(properties);
 
             merged.put(purl, placeholder);

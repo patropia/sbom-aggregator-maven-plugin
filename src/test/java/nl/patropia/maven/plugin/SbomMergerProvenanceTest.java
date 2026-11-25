@@ -275,19 +275,14 @@ class SbomMergerProvenanceTest {
 
     /**
      * A dependency that the project declares directly and that has no SBOM of its own must stay a direct child of the
-     * root, even when an upstream SBOM also lists it as a child of another component. Today the placeholder for it is
-     * reachable through that upstream, so it is not wired to the root: {@link SbomMerger.MissingDependency} does not yet
-     * say whether a dependency is direct, so the merger cannot tell "declared by the project" from "transitive". The
-     * component stays reachable and carries the missingSbom marker, so provenance is intact; only the direct edge that
-     * Maven's own resolution would give it is missing.
+     * root, even when an upstream SBOM also lists it as a child of another component (M3).
      */
     @Test
-    @Disabled("Known limitation (M3): a missing direct dependency reachable through an upstream SBOM loses its direct edge")
     void missingDirectDependencyReachableViaUpstreamStaysDirectChildOfRoot() throws Exception {
         // no project SBOM; the project declares A (SBOM present) and D (no SBOM); A's SBOM already lists A -> D
         Bom aBom = bom(comp("self", A), List.of(comp("d", D)), List.of(dep("self", "d"), dep("d")));
-        List<SbomMerger.MissingDependency> missing =
-                List.of(new SbomMerger.MissingDependency("com.acme", "d", "1.0.0"));
+        List<SbomMerger.MissingDependency> missing = List.of(new SbomMerger.MissingDependency("com.acme", "d", "1.0.0",
+                true, List.of("com.acme:root:jar:1.0.0", "com.acme:d:jar:1.0.0")));
 
         Bom merged = merge(Collections.singletonList(aBom), missing);
 
@@ -296,6 +291,59 @@ class SbomMergerProvenanceTest {
         assertDirectChildren(merged, ROOT, refByPurl(merged, A), d);
         assertPath(merged, ROOT, refByPurl(merged, A), d);
         assertTrue(hasProperty(component(merged, d), SbomMerger.PROPERTY_MISSING_SBOM, "true"));
+        assertTrue(hasProperty(component(merged, d), SbomMerger.PROPERTY_DIRECT_DEPENDENCY, "true"));
+    }
+
+    /** Without the direct flag (3-arg constructor) the M2 behaviour is kept: D stays only under A. */
+    @Test
+    void missingNonDirectDependencyReachableViaUpstreamIsNotWiredToRoot() throws Exception {
+        Bom aBom = bom(comp("self", A), List.of(comp("d", D)), List.of(dep("self", "d"), dep("d")));
+        List<SbomMerger.MissingDependency> missing =
+                List.of(new SbomMerger.MissingDependency("com.acme", "d", "1.0.0"));
+
+        Bom merged = merge(Collections.singletonList(aBom), missing);
+
+        assertGraphInvariants(merged);
+        String d = refByPurl(merged, D);
+        assertDirectChildren(merged, ROOT, refByPurl(merged, A));
+        assertEquals(Collections.singleton(refByPurl(merged, A)), parents(merged, d));
+        assertTrue(hasProperty(component(merged, d), SbomMerger.PROPERTY_MISSING_SBOM, "true"));
+        assertTrue(component(merged, d).getProperties().stream()
+                .noneMatch(p -> SbomMerger.PROPERTY_DIRECT_DEPENDENCY.equals(p.getName())),
+                "no provenance is recorded when it is unknown");
+    }
+
+    /** A transitive placeholder records how Maven reached it, without duplicating properties on re-registration. */
+    @Test
+    void transitivePlaceholderRecordsItsDependencyTrail() throws Exception {
+        Bom own = bom(comp("root", ROOT), List.of(comp("a", A)), List.of(dep("root", "a"), dep("a")));
+        Bom aBom = bom(comp("self", A), List.of(comp("b", B)), List.of(dep("self", "b"), dep("b")));
+        List<String> trail = List.of("com.acme:root:jar:1.0.0", "com.acme:a:jar:1.0.0", "com.acme:b:jar:1.0.0",
+                "com.acme:c:jar:1.0.0");
+        SbomMerger.MissingDependency c = new SbomMerger.MissingDependency("com.acme", "c", "1.0.0", false, trail);
+
+        Bom merged = merge(Arrays.asList(own, aBom), Arrays.asList(c, c));
+
+        assertGraphInvariants(merged);
+        String cRef = refByPurl(merged, C);
+        Component placeholder = component(merged, cRef);
+        assertTrue(hasProperty(placeholder, SbomMerger.PROPERTY_MISSING_SBOM, "true"));
+        assertTrue(hasProperty(placeholder, SbomMerger.PROPERTY_DIRECT_DEPENDENCY, "false"));
+        assertTrue(hasProperty(placeholder, SbomMerger.PROPERTY_DEPENDENCY_TRAIL, String.join(" -> ", trail)));
+        assertEquals(1, placeholder.getProperties().stream()
+                .filter(p -> SbomMerger.PROPERTY_DEPENDENCY_TRAIL.equals(p.getName())).count());
+        assertEquals(1, placeholder.getProperties().stream()
+                .filter(p -> SbomMerger.PROPERTY_MISSING_SBOM.equals(p.getName())).count());
+        // unreachable through any SBOM (B has none), so it is still wired to the root
+        assertTrue(children(merged, ROOT).contains(cRef));
+    }
+
+    @Test
+    void missingDependencyKeepsBinaryCompatibleDefaults() {
+        SbomMerger.MissingDependency legacy = new SbomMerger.MissingDependency("g", "a", "1");
+        assertFalse(legacy.isDirect());
+        assertTrue(legacy.getTrail().isEmpty());
+        assertEquals("g:a:1", legacy.toString());
     }
 
     @Test
