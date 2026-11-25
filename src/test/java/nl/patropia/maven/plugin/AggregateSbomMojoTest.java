@@ -417,10 +417,88 @@ class AggregateSbomMojoTest {
         assertTrue(declaredOnly.stream().allMatch(c -> c.direct), "includeTransitive=false: everything is direct");
     }
 
+    @Test
+    void collectResolvedVersionsUsesBaseVersionAndIgnoresSbomFilters() throws Exception {
+        MavenProject project = new MavenProject();
+        project.setGroupId("com.acme");
+        project.setArtifactId("root");
+        project.setVersion("1.0.0");
+        org.apache.maven.artifact.Artifact snapshot = artifact("com.acme", "snap", "1.0-SNAPSHOT", null);
+        snapshot.setVersion("1.0-20240101.123456-1");
+        org.apache.maven.artifact.Artifact testScoped = new org.apache.maven.artifact.DefaultArtifact(
+                "com.acme", "junit-like", "5.0", "test", "jar", null,
+                new org.apache.maven.artifact.handler.DefaultArtifactHandler("jar"));
+        org.apache.maven.artifact.Artifact excluded = artifact("org.excluded", "lib", "2.0",
+                Arrays.asList("com.acme:root:jar:1.0.0", "com.acme:snap:jar:1.0-SNAPSHOT", "org.excluded:lib:jar:2.0"));
+        project.setArtifacts(new java.util.LinkedHashSet<>(Arrays.asList(snapshot, testScoped, excluded)));
+
+        AggregateSbomMojo mojo = new AggregateSbomMojo();
+        java.lang.reflect.Field field = AggregateSbomMojo.class.getDeclaredField("project");
+        field.setAccessible(true);
+        field.set(mojo, project);
+        mojo.setIncludeScopes(Collections.singletonList("compile"));
+        mojo.setExcludes(Collections.singletonList("org.excluded:*"));
+
+        for (boolean transitive : new boolean[] {true, false}) {
+            mojo.setIncludeTransitive(transitive);
+            java.util.Map<String, String> resolved = mojo.collectResolvedVersions();
+            assertEquals("1.0-SNAPSHOT", resolved.get("com.acme:snap"), "timestamped SNAPSHOT uses the base version");
+            assertEquals("5.0", resolved.get("com.acme:junit-like"), "scope filters do not apply");
+            assertEquals("2.0", resolved.get("org.excluded:lib"), "excludes do not apply");
+            assertEquals("1.0.0", resolved.get("com.acme:root"), "the project itself is included");
+            assertEquals(4, resolved.size());
+        }
+    }
+
     private static org.apache.maven.artifact.Artifact artifact(String g, String a, String v, List<String> trail) {
         org.apache.maven.artifact.DefaultArtifact artifact = new org.apache.maven.artifact.DefaultArtifact(
                 g, a, v, "compile", "jar", null, new org.apache.maven.artifact.handler.DefaultArtifactHandler("jar"));
         artifact.setDependencyTrail(trail);
         return artifact;
+    }
+
+    @Test
+    void warnVersionDivergenceNamesGroupFromPurlWhenGroupIsBlank() {
+        org.cyclonedx.model.Component component = new org.cyclonedx.model.Component();
+        component.setType(org.cyclonedx.model.Component.Type.LIBRARY);
+        component.setName("x");
+        component.setVersion("1.0");
+        component.setPurl("pkg:maven/com.acme/x@1.0");
+        org.cyclonedx.model.Property property = new org.cyclonedx.model.Property();
+        property.setName(SbomMerger.PROPERTY_MAVEN_RESOLVED_VERSION);
+        property.setValue("2.0");
+        component.setProperties(new java.util.ArrayList<>(Collections.singletonList(property)));
+        Bom bom = new Bom();
+        bom.setComponents(new java.util.ArrayList<>(Collections.singletonList(component)));
+
+        List<String> warnings = new java.util.ArrayList<>();
+        AggregateSbomMojo mojo = new AggregateSbomMojo();
+        mojo.setLog(new org.apache.maven.plugin.logging.SystemStreamLog() {
+            @Override
+            public void warn(CharSequence content) {
+                warnings.add(content.toString());
+            }
+        });
+
+        mojo.warnVersionDivergence(bom);
+
+        assertEquals(1, warnings.size(), "exactly one divergence warning expected");
+        assertTrue(warnings.get(0).contains("com.acme:x: 1.0 -> 2.0"), warnings.get(0));
+        assertFalse(warnings.get(0).contains("null:"), warnings.get(0));
+    }
+
+    @Test
+    void warnVersionDivergenceIsSilentWithoutDivergence() {
+        List<String> warnings = new java.util.ArrayList<>();
+        AggregateSbomMojo mojo = new AggregateSbomMojo();
+        mojo.setLog(new org.apache.maven.plugin.logging.SystemStreamLog() {
+            @Override
+            public void warn(CharSequence content) {
+                warnings.add(content.toString());
+            }
+        });
+        mojo.warnVersionDivergence(new Bom());
+        mojo.warnVersionDivergence(null);
+        assertTrue(warnings.isEmpty(), warnings.toString());
     }
 }
