@@ -218,6 +218,40 @@ keeps its Maven parent and its Maven `dependsOn`, and also stays linked under th
 are added under the image, marked `sbomAggregator:inferredDependency=true`, and the image is listed with
 `aggregate: unknown` in `compositions` (spec 1.4+).
 
+### Provenance properties
+
+The aggregated SBOM keeps the dependency graph each dependency SBOM declares (`dependencies[].ref -> dependsOn[]`),
+hangs every dependency SBOM's `metadata.component` under its Maven parent, and adds these CycloneDX `properties` so a
+consumer can trace where a component came from:
+
+| Property | Set on | Meaning |
+|----------|--------|---------|
+| `sbomAggregator:missingSbom` | Placeholder components | `true`: Maven resolved the dependency but it has no attached SBOM (only with `failOnMissingSbom=false`). A transitive placeholder that no dependency SBOM lists is linked under the nearest ancestor from its `dependencyTrail` that is in the aggregated SBOM (e.g. under `lib-b` for `app -> lib-a -> lib-b -> lib-c`), not under the root. |
+| `sbomAggregator:direct` | Missing-SBOM placeholders | `true` when the project declares the dependency itself, `false` when it is transitive. |
+| `sbomAggregator:dependencyTrail` | Missing-SBOM placeholders | Maven's dependency trail as `Artifact.getId()` entries (`groupId:artifactId:type[:classifier]:version`) joined by ` -> `, project first, the dependency last, e.g. `com.acme:app:pom:1.0 -> com.acme:lib-b:jar:1.0 -> com.acme:lib-c:jar:1.0`. |
+| `sbomAggregator:mavenResolvedVersion` | Components listed by a dependency SBOM | The version Maven actually resolved for this `groupId:artifactId`, when it differs from the version the SBOM lists (version mediation, `dependencyManagement` or BOM imports). |
+| `sbomAggregator:versionDivergence` | Same components | `true` whenever `mavenResolvedVersion` is set. The goal also logs one `Version divergence:` warning listing every such component. |
+| `sbomAggregator:inferredDependency` | Links not declared by any input | See [Merging scanner SBOMs](#merging-scanner-sboms). |
+
+Versions, bom-refs and `dependsOn` edges are never rewritten: a component the dependency SBOM lists at `1.0` stays
+`1.0` with its own edges, and only gains the two divergence properties. Limits of the divergence check:
+
+- Matching uses `groupId:artifactId` only, so artifacts that differ only by classifier share one resolved version.
+- Libraries Maven never resolved (for example code shaded into a jar) are never flagged.
+- The comparison is exact text, so `1.0` and `1.0.0` count as different.
+
+Known gaps in the hierarchy:
+
+- Without `projectSbom`, each dependency SBOM's top component is linked directly under the root.
+- A transitive missing-SBOM placeholder falls back to the root only when no ancestor from its `dependencyTrail` is in
+  the aggregated SBOM (the trail still records the real path). Trail entries are matched by
+  `groupId:artifactId:version`, so a classifier-qualified entry such as `g:a:jar:tests:1.0` resolves to the plain
+  `g:a@1.0` component as its parent.
+- A `projectSbom` whose `metadata.component` has neither a `bom-ref` nor a `purl` is not recognised as the project
+  itself: the project then appears as an extra component and every dependency SBOM's top component is linked directly
+  under the root. Give the project SBOM's `metadata.component` the project's Maven purl (as `cyclonedx-maven-plugin`
+  does) to avoid this.
+
 ### Standards conformance
 
 How the merged SBOM maps onto CycloneDX and SPDX:

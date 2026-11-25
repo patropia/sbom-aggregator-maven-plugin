@@ -487,10 +487,14 @@ public final class SbomMerger {
         // 2. placeholders for dependencies without an SBOM
         Set<String> placeholderRefs = new LinkedHashSet<>();
         Set<String> directPlaceholderRefs = new LinkedHashSet<>();
+        Map<String, List<String>> placeholderTrails = new HashMap<>();
         for (MissingDependency missingDependency : missing) {
             String ref = state.registerPlaceholder(missingDependency);
             if (ref != null) {
                 placeholderRefs.add(ref);
+                if (!missingDependency.getTrail().isEmpty()) {
+                    placeholderTrails.putIfAbsent(ref, missingDependency.getTrail());
+                }
                 if (missingDependency.isDirect()) {
                     directPlaceholderRefs.add(ref);
                 }
@@ -622,23 +626,35 @@ public final class SbomMerger {
         }
 
         // 4c. placeholders of dependencies the project declares directly are always direct children of the
-        // root; other placeholders are wired to the root only when not otherwise reachable: a dependency without
-        // an SBOM that an upstream SBOM already lists (e.g. root -> A -> B -> C with C missing) keeps its real
-        // parent and is not flattened into a direct dependency of the project
+        // root; other placeholders are wired only when not otherwise reachable: a dependency without an SBOM
+        // that an upstream SBOM already lists (e.g. root -> A -> B -> C with C missing) keeps its real parent.
+        // When no SBOM lists it, the placeholder is linked under the nearest ancestor from its Maven dependency
+        // trail that is present in (and reachable within) the aggregated BOM; the root is the last resort.
         Set<String> rootDirect = graph.get(rootRef);
         Set<String> reachedFromRoot = reachable(graph, rootRef);
-        for (String placeholderRef : placeholderRefs) {
-            if (placeholderRef.equals(rootRef)) {
-                continue;
-            }
-            if (directPlaceholderRefs.contains(placeholderRef)) {
-                if (rootDirect.add(placeholderRef)) {
-                    reachedFromRoot.addAll(reachable(graph, placeholderRef));
-                }
-            } else if (!reachedFromRoot.contains(placeholderRef)) {
-                rootDirect.add(placeholderRef);
+        for (String placeholderRef : directPlaceholderRefs) {
+            if (!placeholderRef.equals(rootRef) && rootDirect.add(placeholderRef)) {
                 reachedFromRoot.addAll(reachable(graph, placeholderRef));
             }
+        }
+        // shorter trails first, so a placeholder whose trail parent is itself a placeholder finds it wired
+        List<String> transitivePlaceholders = new ArrayList<>();
+        for (String placeholderRef : placeholderRefs) {
+            if (!placeholderRef.equals(rootRef) && !directPlaceholderRefs.contains(placeholderRef)) {
+                transitivePlaceholders.add(placeholderRef);
+            }
+        }
+        transitivePlaceholders.sort(Comparator.comparingInt(
+                ref -> placeholderTrails.getOrDefault(ref, Collections.emptyList()).size()));
+        for (String placeholderRef : transitivePlaceholders) {
+            if (reachedFromRoot.contains(placeholderRef)) {
+                continue;
+            }
+            String parentRef = trailParent(state, placeholderTrails.get(placeholderRef), placeholderRef,
+                    reachedFromRoot);
+            graph.computeIfAbsent(parentRef == null ? rootRef : parentRef, key -> new LinkedHashSet<>())
+                    .add(placeholderRef);
+            reachedFromRoot.addAll(reachable(graph, placeholderRef));
         }
 
         // 4d. flag components whose version differs from the one Maven resolved (never rewrite anything)
@@ -1118,6 +1134,26 @@ public final class SbomMerger {
         return new ArrayList<>(seen.values());
     }
 
+    /**
+     * Finds the nearest ancestor of a placeholder on its Maven dependency trail that is a component of the
+     * aggregated BOM reachable from the root. Trail entries use Maven's {@code Artifact.getId()} form
+     * ({@code groupId:artifactId:type[:classifier]:version}). Returns {@code null} when no such ancestor exists.
+     */
+    private static String trailParent(State state, List<String> trail, String placeholderRef,
+                                      Set<String> reachedFromRoot) {
+        if (trail == null || trail.size() < 2) {
+            return null;
+        }
+        for (int i = trail.size() - 2; i >= 0; i--) {
+            String ref = state.lookupGav(trail.get(i));
+            if (ref != null && !ref.equals(placeholderRef) && !ref.equals(state.rootRef)
+                    && state.merged.containsKey(ref) && reachedFromRoot.contains(ref)) {
+                return ref;
+            }
+        }
+        return null;
+    }
+
     private static String gavOf(Component component) {
         if (component == null
                 || component.getGroup() == null
@@ -1290,6 +1326,28 @@ public final class SbomMerger {
             usedRefs.add(purl);
             index(placeholder, purl);
             return purl;
+        }
+
+        /**
+         * Looks up a component by a Maven artifact id ({@code g:a:type[:classifier]:v} or {@code g:a:v});
+         * returns its final bom-ref or {@code null}.
+         */
+        String lookupGav(String artifactId) {
+            if (isBlank(artifactId)) {
+                return null;
+            }
+            String[] parts = artifactId.split(":");
+            if (parts.length < 3 || isBlank(parts[0]) || isBlank(parts[1]) || isBlank(parts[parts.length - 1])) {
+                return null;
+            }
+            String g = parts[0];
+            String a = parts[1];
+            String v = parts[parts.length - 1];
+            String existing = purlIndex.get(Purls.matchKey(Purls.maven(g, a, v, null, null)));
+            if (existing == null) {
+                existing = gavIndex.get(g + ":" + a + ":" + v);
+            }
+            return existing;
         }
 
         /**
