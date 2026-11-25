@@ -155,6 +155,19 @@ public final class SbomMerger {
     public static final String PROPERTY_DIRECT_DEPENDENCY = "sbomAggregator:direct";
 
     /**
+     * Property on a Maven component of a sub-SBOM whose {@code groupId:artifactId} Maven resolved at a different
+     * version (version mediation, {@code dependencyManagement} or BOM overrides). Its value is the version Maven
+     * resolved; the component keeps the version, bom-ref and edges its sub-SBOM declared.
+     */
+    public static final String PROPERTY_MAVEN_RESOLVED_VERSION = "sbomAggregator:mavenResolvedVersion";
+
+    /**
+     * Property set to {@code true} on a component that carries {@link #PROPERTY_MAVEN_RESOLVED_VERSION}: the
+     * version listed by the sub-SBOM is not the one Maven puts on the project's classpath.
+     */
+    public static final String PROPERTY_VERSION_DIVERGENCE = "sbomAggregator:versionDivergence";
+
+    /**
      * Property set on a component that was not reachable through its input SBOM's dependency graph and was
      * therefore linked under that SBOM's {@code metadata.component} (or the root) by inference. The property
      * is placed on the linked (target) component only. Its value is always {@code true}.
@@ -375,6 +388,35 @@ public final class SbomMerger {
                             List<MissingDependency> missingDeps,
                             Instant outputTimestamp,
                             boolean includeVulnerabilities) {
+        return merge(rootGroupId, rootArtifactId, rootVersion, specVersion, parsedBoms, ownerRefs, scanBoms,
+                missingDeps, outputTimestamp, includeVulnerabilities, null);
+    }
+
+    /**
+     * Merges the given BOMs and flags version-mediation divergence against Maven's resolved dependency set.
+     *
+     * <p>{@code resolvedVersions} maps {@code groupId:artifactId} to the version Maven resolved for the build
+     * (its base version, so a timestamped SNAPSHOT is {@code x-SNAPSHOT}). Every merged component with a
+     * {@code pkg:maven} purl whose {@code groupId:artifactId} is in the map with a <em>different</em> version gets
+     * {@link #PROPERTY_MAVEN_RESOLVED_VERSION} and {@link #PROPERTY_VERSION_DIVERGENCE}. Versions, bom-refs and
+     * {@code dependsOn} edges are never rewritten: the sub-SBOM's provenance is kept as declared. Components whose
+     * {@code groupId:artifactId} is not in the map, the root and missing-SBOM placeholders are left untouched.
+     * A {@code null} or empty map produces exactly the output of the overload without it.</p>
+     *
+     * @param resolvedVersions Maven's resolved versions by {@code groupId:artifactId}; may be {@code null}
+     * @see #merge(String, String, String, String, List, List, List, List, Instant, boolean)
+     */
+    public static Bom merge(String rootGroupId,
+                            String rootArtifactId,
+                            String rootVersion,
+                            String specVersion,
+                            List<Bom> parsedBoms,
+                            List<String> ownerRefs,
+                            List<Bom> scanBoms,
+                            List<MissingDependency> missingDeps,
+                            Instant outputTimestamp,
+                            boolean includeVulnerabilities,
+                            Map<String, String> resolvedVersions) {
         Objects.requireNonNull(rootGroupId, "rootGroupId must not be null");
         Objects.requireNonNull(rootArtifactId, "rootArtifactId must not be null");
         Objects.requireNonNull(rootVersion, "rootVersion must not be null");
@@ -596,6 +638,16 @@ public final class SbomMerger {
             } else if (!reachedFromRoot.contains(placeholderRef)) {
                 rootDirect.add(placeholderRef);
                 reachedFromRoot.addAll(reachable(graph, placeholderRef));
+            }
+        }
+
+        // 4d. flag components whose version differs from the one Maven resolved (never rewrite anything)
+        if (resolvedVersions != null && !resolvedVersions.isEmpty()) {
+            for (Map.Entry<String, Component> entry : state.merged.entrySet()) {
+                if (entry.getKey().equals(rootRef) || placeholderRefs.contains(entry.getKey())) {
+                    continue;
+                }
+                flagVersionDivergence(entry.getValue(), resolvedVersions);
             }
         }
 
@@ -941,6 +993,36 @@ public final class SbomMerger {
                 markInferred(merged.get(top));
                 added = true;
             }
+        }
+    }
+
+    /**
+     * Adds {@link #PROPERTY_MAVEN_RESOLVED_VERSION} and {@link #PROPERTY_VERSION_DIVERGENCE} to a Maven component
+     * whose {@code groupId:artifactId} Maven resolved at a different version. Existing properties are kept.
+     */
+    private static void flagVersionDivergence(Component component, Map<String, String> resolvedVersions) {
+        if (!isMavenPurl(component) || isBlank(component.getVersion())) {
+            return;
+        }
+        String groupId = isBlank(component.getGroup()) ? Purls.mavenGroupId(component.getPurl()) : component.getGroup();
+        if (isBlank(groupId) || isBlank(component.getName())) {
+            return;
+        }
+        String resolved = resolvedVersions.get(groupId + ":" + component.getName());
+        if (isBlank(resolved) || resolved.equals(component.getVersion())) {
+            return;
+        }
+        List<Property> properties = component.getProperties() == null
+                ? new ArrayList<>() : new ArrayList<>(component.getProperties());
+        addIfAbsent(properties, PROPERTY_MAVEN_RESOLVED_VERSION, resolved);
+        addIfAbsent(properties, PROPERTY_VERSION_DIVERGENCE, "true");
+        component.setProperties(properties);
+    }
+
+    private static void addIfAbsent(List<Property> properties, String name, String value) {
+        boolean present = properties.stream().anyMatch(p -> p != null && name.equals(p.getName()));
+        if (!present) {
+            properties.add(new Property(name, value));
         }
     }
 

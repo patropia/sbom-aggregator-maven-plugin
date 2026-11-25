@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Version-mediation divergence is flagged: a Maven component listed by a dependency SBOM whose `groupId:artifactId`
+  Maven resolved at a different version (mediation, `dependencyManagement`/BOM overrides) gets
+  `sbomAggregator:mavenResolvedVersion=<resolved version>` and `sbomAggregator:versionDivergence=true`, and the
+  goal logs one warning listing them. Versions, bom-refs and `dependsOn` edges are kept as the sub-SBOM declared
+  them. `SbomMerger.merge` has a new overload taking the resolved versions; existing overloads are unchanged.
 - Missing-SBOM placeholders now record their Maven provenance: `sbomAggregator:direct=true|false` (whether the
   project declares the dependency itself) and `sbomAggregator:dependencyTrail` (Maven's dependency trail, project
   first, joined by ` -> `). `SbomMerger.MissingDependency` has a new constructor taking `direct` and `trail`; the

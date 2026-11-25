@@ -59,6 +59,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -395,7 +396,9 @@ public class AggregateSbomMojo extends AbstractMojo {
                 scans,
                 missingSboms,
                 parseOutputTimestamp(outputTimestamp),
-                includeVulnerabilities);
+                includeVulnerabilities,
+                collectResolvedVersions());
+        warnVersionDivergence(mergedBom);
 
         // 4. Serialize and output merged BOM
         File outputFile = new File(outputDirectory, outputName + "." + outputExtension());
@@ -469,6 +472,59 @@ public class AggregateSbomMojo extends AbstractMojo {
         } catch (Exception e) {
             throw new MojoExecutionException("Failed to attach SPDX SBOM to project", e);
         }
+    }
+
+    /**
+     * Maven's resolved version of every artifact of the build, by {@code groupId:artifactId}, plus the project
+     * itself. Uses the base version, so a timestamped SNAPSHOT compares equal to {@code x-SNAPSHOT}. Not filtered
+     * by {@code includeScopes} or {@code excludes}: an artifact left out of the SBOM was still resolved by Maven.
+     */
+    Map<String, String> collectResolvedVersions() {
+        Map<String, String> resolved = new java.util.TreeMap<>();
+        if (project == null) {
+            return resolved;
+        }
+        if (project.getArtifacts() != null) {
+            for (org.apache.maven.artifact.Artifact a : project.getArtifacts()) {
+                String version = a.getBaseVersion() != null ? a.getBaseVersion() : a.getVersion();
+                if (a.getGroupId() != null && a.getArtifactId() != null && version != null) {
+                    resolved.put(a.getGroupId() + ":" + a.getArtifactId(), version);
+                }
+            }
+        }
+        if (project.getGroupId() != null && project.getArtifactId() != null && project.getVersion() != null) {
+            resolved.put(project.getGroupId() + ":" + project.getArtifactId(), project.getVersion());
+        }
+        return resolved;
+    }
+
+    /** Logs one warning summarising the components whose sub-SBOM version differs from Maven's resolved one. */
+    void warnVersionDivergence(Bom bom) {
+        List<String> diverged = new ArrayList<>();
+        if (bom != null && bom.getComponents() != null) {
+            for (org.cyclonedx.model.Component component : bom.getComponents()) {
+                if (component.getProperties() == null) {
+                    continue;
+                }
+                for (org.cyclonedx.model.Property property : component.getProperties()) {
+                    if (property != null && SbomMerger.PROPERTY_MAVEN_RESOLVED_VERSION.equals(property.getName())) {
+                        diverged.add(groupOf(component) + ":" + component.getName() + ": "
+                                + component.getVersion() + " -> " + property.getValue());
+                    }
+                }
+            }
+        }
+        if (!diverged.isEmpty()) {
+            getLog().warn("Version divergence: " + diverged.size()
+                    + " component(s) listed by dependency SBOMs differ from the versions Maven resolved: "
+                    + String.join(", ", diverged));
+        }
+    }
+
+    /** The component's group, falling back to the group of its Maven purl when the SBOM leaves it blank. */
+    private static String groupOf(org.cyclonedx.model.Component component) {
+        String group = component.getGroup();
+        return group != null && !group.isBlank() ? group : Purls.mavenGroupId(component.getPurl());
     }
 
     /**
