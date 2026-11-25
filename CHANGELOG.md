@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `projectSbom` whose `metadata.component` has no `bom-ref` or `purl` (a hand-written SBOM) is now recognised as
+  the project itself: it no longer appears as an extra component, its root `dependencies` become the root's
+  `dependsOn`, and its metadata is merged into the root. A project SBOM naming a different project by purl or GAV is
+  treated as that project's SBOM.
 - A transitive missing-SBOM placeholder that no dependency SBOM lists is now linked under the nearest ancestor from
   its Maven dependency trail that is present in the aggregated SBOM, instead of directly under the root. The root is
   only used when no trail ancestor is present.

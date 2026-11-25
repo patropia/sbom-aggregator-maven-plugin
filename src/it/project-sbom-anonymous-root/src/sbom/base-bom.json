@@ -1,0 +1,37 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "bom-ref": "app",
+      "name": "project-sbom-anonymous-root",
+      "description": "Hand-written project SBOM without purl or GAV"
+    },
+    "licenses": [ { "license": { "id": "Apache-2.0" } } ]
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "lib-a-local",
+      "group": "it.anonroot",
+      "name": "lib-a",
+      "version": "1.0.0",
+      "purl": "pkg:maven/it.anonroot/lib-a@1.0.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "lib-d-local",
+      "group": "it.anonroot",
+      "name": "lib-d",
+      "version": "1.0.0",
+      "purl": "pkg:maven/it.anonroot/lib-d@1.0.0"
+    }
+  ],
+  "dependencies": [
+    { "ref": "app", "dependsOn": [ "lib-a-local", "lib-d-local" ] },
+    { "ref": "lib-a-local" },
+    { "ref": "lib-d-local" }
+  ]
+}

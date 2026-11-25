@@ -352,7 +352,12 @@ public class AggregateSbomMojo extends AbstractMojo {
                 Bom parsedBom = reader.read(file);
                 if (parsedBom != null) {
                     boms.add(parsedBom);
-                    owners.add(ownerPurl(fileToDep.get(file)));
+                    // the project's own SBOM is owned by the root itself, so the merger always treats it as
+                    // the root's BOM, even when its metadata.component has no bom-ref or purl
+                    owners.add(file.equals(projectSbom) && fileToDep.get(file) == null
+                            ? Purls.maven(project.getGroupId(), project.getArtifactId(), project.getVersion(),
+                                    null, null)
+                            : ownerPurl(fileToDep.get(file)));
                 }
             } catch (SbomInputReader.InvalidSbomException e) {
                 DepCoord owner = fileToDep.get(file);
