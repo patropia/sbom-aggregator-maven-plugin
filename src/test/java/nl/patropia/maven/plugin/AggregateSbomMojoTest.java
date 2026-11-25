@@ -417,6 +417,39 @@ class AggregateSbomMojoTest {
         assertTrue(declaredOnly.stream().allMatch(c -> c.direct), "includeTransitive=false: everything is direct");
     }
 
+    @Test
+    void collectResolvedVersionsUsesBaseVersionAndIgnoresSbomFilters() throws Exception {
+        MavenProject project = new MavenProject();
+        project.setGroupId("com.acme");
+        project.setArtifactId("root");
+        project.setVersion("1.0.0");
+        org.apache.maven.artifact.Artifact snapshot = artifact("com.acme", "snap", "1.0-SNAPSHOT", null);
+        snapshot.setVersion("1.0-20240101.123456-1");
+        org.apache.maven.artifact.Artifact testScoped = new org.apache.maven.artifact.DefaultArtifact(
+                "com.acme", "junit-like", "5.0", "test", "jar", null,
+                new org.apache.maven.artifact.handler.DefaultArtifactHandler("jar"));
+        org.apache.maven.artifact.Artifact excluded = artifact("org.excluded", "lib", "2.0",
+                Arrays.asList("com.acme:root:jar:1.0.0", "com.acme:snap:jar:1.0-SNAPSHOT", "org.excluded:lib:jar:2.0"));
+        project.setArtifacts(new java.util.LinkedHashSet<>(Arrays.asList(snapshot, testScoped, excluded)));
+
+        AggregateSbomMojo mojo = new AggregateSbomMojo();
+        java.lang.reflect.Field field = AggregateSbomMojo.class.getDeclaredField("project");
+        field.setAccessible(true);
+        field.set(mojo, project);
+        mojo.setIncludeScopes(Collections.singletonList("compile"));
+        mojo.setExcludes(Collections.singletonList("org.excluded:*"));
+
+        for (boolean transitive : new boolean[] {true, false}) {
+            mojo.setIncludeTransitive(transitive);
+            java.util.Map<String, String> resolved = mojo.collectResolvedVersions();
+            assertEquals("1.0-SNAPSHOT", resolved.get("com.acme:snap"), "timestamped SNAPSHOT uses the base version");
+            assertEquals("5.0", resolved.get("com.acme:junit-like"), "scope filters do not apply");
+            assertEquals("2.0", resolved.get("org.excluded:lib"), "excludes do not apply");
+            assertEquals("1.0.0", resolved.get("com.acme:root"), "the project itself is included");
+            assertEquals(4, resolved.size());
+        }
+    }
+
     private static org.apache.maven.artifact.Artifact artifact(String g, String a, String v, List<String> trail) {
         org.apache.maven.artifact.DefaultArtifact artifact = new org.apache.maven.artifact.DefaultArtifact(
                 g, a, v, "compile", "jar", null, new org.apache.maven.artifact.handler.DefaultArtifactHandler("jar"));
