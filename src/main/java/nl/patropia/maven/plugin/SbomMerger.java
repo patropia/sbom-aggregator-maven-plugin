@@ -368,7 +368,12 @@ public final class SbomMerger {
      *
      * <p>{@code ownerRefs} is parallel to {@code parsedBoms}: entry {@code i} is the purl (e.g.
      * {@code pkg:maven/g/a@v}) of the dependency whose attached SBOM is {@code parsedBoms.get(i)}, or
-     * {@code null} for the project's own SBOM or an input of unknown origin. When an input has no usable
+     * {@code null} for an input of unknown origin. The project's own SBOM is marked by passing the root's own purl
+     * ({@code pkg:maven/rootGroupId/rootArtifactId@rootVersion}) as its owner: it is then always treated as the
+     * root's BOM, even when its {@code metadata.component} has no bom-ref or purl, and such an anonymous
+     * {@code metadata.component} is merged into the root instead of becoming a separate component. A
+     * {@code metadata.component} with a purl (or complete GAV) of another project is kept as declared: that input is
+     * treated like any upstream SBOM. When any other input has no usable
      * {@code metadata.component}, the owner is used instead: its unreachable components are anchored under the
      * owning dependency rather than under the project root, and the input is authoritative for the
      * {@code dependsOn} of the components it describes (it is a Maven SBOM). An owner that does not resolve to a
@@ -453,14 +458,28 @@ public final class SbomMerger {
 
         // 1. collect and register components (project metadata component, components, nested ones)
         List<Map<String, String>> localMaps = new ArrayList<>();
-        for (Bom bom : boms) {
+        List<Boolean> ownedByRoot = new ArrayList<>();
+        for (int b = 0; b < boms.size(); b++) {
+            Bom bom = boms.get(b);
             Map<String, String> localMap = new HashMap<>();
             localMaps.add(localMap);
+            ownedByRoot.add(b < firstScan && ownerRefs != null && b < ownerRefs.size()
+                    && isRootOwner(ownerRefs.get(b), rootRef));
 
             Component metaComponent = bom.getMetadata() == null ? null : bom.getMetadata().getComponent();
             if (metaComponent != null) {
                 List<Component> flatMeta = flatten(metaComponent);
-                for (Component component : flatMeta) {
+                for (int c = 0; c < flatMeta.size(); c++) {
+                    Component component = flatMeta.get(c);
+                    if (c == 0 && ownedByRoot.get(b) && isAnonymousProjectComponent(component, rootGav)) {
+                        // the project's own SBOM whose metadata.component carries no purl: it describes the root,
+                        // so its local bom-ref is an alias of the root instead of a stray extra component (R13)
+                        state.enrich(rootComponent, component);
+                        if (!isBlank(component.getBomRef())) {
+                            localMap.put(component.getBomRef(), rootRef);
+                        }
+                        continue;
+                    }
                     state.register(component, localMap);
                 }
             }
@@ -519,11 +538,20 @@ public final class SbomMerger {
             if (metaRef == null && metaComponent != null) {
                 metaRef = state.resolve(metaComponent.getPurl(), localMap);
             }
+            if (metaRef == null && metaComponent != null && ownedByRoot.get(i)
+                    && !isAnonymousProjectComponent(metaComponent, rootGav)) {
+                // the project's SBOM names another project by GAV only: that component is its anchor (an
+                // upstream SBOM), so the components it describes stay reachable through it
+                metaRef = state.lookupGav(gavOf(metaComponent));
+            }
             boolean ownedByMavenDependency = false;
             if (metaRef == null && i < firstScan && ownerRefs != null && i < ownerRefs.size()) {
                 // no usable metadata.component: fall back to the Maven dependency this SBOM was attached to
                 String owner = state.resolve(ownerRefs.get(i), localMap);
-                if (owner != null && !owner.equals(rootRef)) {
+                if (ownedByRoot.get(i)) {
+                    // the project's own SBOM (R13): it is the root's BOM even without a usable metadata.component
+                    metaRef = rootRef;
+                } else if (owner != null && !owner.equals(rootRef)) {
                     metaRef = owner;
                     ownedByMavenDependency = true;
                 }
@@ -607,7 +635,7 @@ public final class SbomMerger {
         // 4b. link components that are not reachable from the root under their input's metadata.component
         Set<String> inferredAnchors = new LinkedHashSet<>();
         for (int i = 0; i < boms.size(); i++) {
-            if (i < firstScan && rootRef.equals(anchors.get(i))) {
+            if (i < firstScan && rootRef.equals(anchors.get(i)) && !ownBomChildren.isEmpty()) {
                 // the project's own SBOM is authoritative for the root's direct dependencies; an explicitly
                 // marked scan of the project itself still gets its orphans linked (as inferred) under the root
                 continue;
@@ -931,6 +959,23 @@ public final class SbomMerger {
             }
         }
         return flat;
+    }
+
+    /** Whether an owner purl names the project root itself (the owner the Mojo passes for its own SBOM). */
+    private static boolean isRootOwner(String owner, String rootRef) {
+        return !isBlank(owner) && Purls.matchKey(rootRef).equals(Purls.matchKey(owner));
+    }
+
+    /**
+     * Whether a metadata.component of the project's own SBOM can only mean the project: it has no purl and either
+     * no complete GAV or the root's GAV. A component with a purl (or GAV) for another project is left alone.
+     */
+    private static boolean isAnonymousProjectComponent(Component component, String rootGav) {
+        if (!isBlank(component.getPurl())) {
+            return false;
+        }
+        String gav = gavOf(component);
+        return gav == null || gav.equals(rootGav);
     }
 
     /**
