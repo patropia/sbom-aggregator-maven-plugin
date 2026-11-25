@@ -460,6 +460,95 @@ class SbomMergerProvenanceTest {
         assertAllReachableFromRoot(merged);
     }
 
+    // --- R13: the project's own SBOM (owner = root purl) is the root's BOM even without a usable metadata.component
+
+    private Bom rawBom(String metadata, List<String> components, List<String> dependencies) throws Exception {
+        String json = "{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.5\",\"version\":1,"
+                + "\"metadata\":" + metadata + ","
+                + "\"components\":[" + String.join(",", components) + "],"
+                + "\"dependencies\":[" + String.join(",", dependencies) + "]}";
+        Path file = dir.resolve("raw-" + (counter++) + ".json");
+        Files.writeString(file, json, StandardCharsets.UTF_8);
+        return new JsonParser().parse(file.toFile());
+    }
+
+    private static Bom mergeOwned(List<Bom> boms, List<String> owners) {
+        return SbomMerger.merge("com.acme", "root", "1.0.0", "1.5", new ArrayList<>(boms), owners, null, null,
+                null, false);
+    }
+
+    private static boolean hasComponentNamed(Bom merged, String name) {
+        return merged.getComponents() != null
+                && merged.getComponents().stream().anyMatch(c -> name.equals(c.getName()));
+    }
+
+    @Test
+    void anonymousProjectSbomWithoutDependenciesIsTheRoot() throws Exception {
+        Bom own = rawBom("{\"component\":{\"type\":\"application\",\"name\":\"root\","
+                        + "\"description\":\"hand written\"},\"licenses\":[{\"license\":{\"id\":\"MIT\"}}]}",
+                Arrays.asList(comp("a", A), comp("b", B)), Collections.emptyList());
+        Bom merged = mergeOwned(List.of(own), Arrays.asList(ROOT));
+
+        assertEquals(ROOT, merged.getMetadata().getComponent().getBomRef());
+        assertFalse(hasComponentNamed(merged, "root"), "no stray project component");
+        assertGraphInvariants(merged);
+        assertTrue(children(merged, ROOT).containsAll(List.of(refByPurl(merged, A), refByPurl(merged, B))));
+        assertEquals("hand written", merged.getMetadata().getComponent().getDescription());
+        assertNotNull(merged.getMetadata().getLicenses(), "metadata licenses are copied from the project SBOM");
+    }
+
+    @Test
+    void projectSbomWithLocalBomRefOnlyKeepsDeclaredRootDependencies() throws Exception {
+        Bom own = rawBom("{\"component\":{\"type\":\"application\",\"bom-ref\":\"app\",\"name\":\"root\"}}",
+                Arrays.asList(comp("a", A), comp("b", B)), Arrays.asList(dep("app", "a"), dep("a", "b")));
+        Bom merged = mergeOwned(List.of(own), Arrays.asList(ROOT));
+
+        String a = refByPurl(merged, A);
+        assertEquals(java.util.Set.of(a), children(merged, ROOT));
+        assertPath(merged, ROOT, a, refByPurl(merged, B));
+        assertFalse(hasComponentNamed(merged, "root"), "no stray project component");
+        assertGraphInvariants(merged);
+    }
+
+    @Test
+    void projectSbomNamingAnotherProjectByPurlIsAnUpstreamSbom() throws Exception {
+        Bom own = rawBom("{\"component\":" + comp("x", X) + "}",
+                Arrays.asList(comp("a", A)), Arrays.asList(dep("x", "a")));
+        Bom merged = mergeOwned(List.of(own), Arrays.asList(ROOT));
+
+        String x = refByPurl(merged, X);
+        assertNotNull(x, "the other project stays a component");
+        assertTrue(children(merged, ROOT).contains(x));
+        assertPath(merged, ROOT, x, refByPurl(merged, A));
+        assertGraphInvariants(merged);
+    }
+
+    @Test
+    void projectSbomNamingAnotherProjectByGavOnlyIsAnchoredUnderThatProject() throws Exception {
+        Bom own = rawBom("{\"component\":{\"type\":\"application\",\"group\":\"com.acme\",\"name\":\"x\","
+                        + "\"version\":\"1.0.0\"}}",
+                Arrays.asList(comp("a", A), comp("b", B)), Arrays.asList(dep("a", "b")));
+        Bom other = bom(comp("y", Y), Arrays.asList(comp("y", Y)), Collections.emptyList());
+        Bom merged = mergeOwned(Arrays.asList(own, other), Arrays.asList(ROOT, Y));
+
+        assertTrue(hasComponentNamed(merged, "x"), "the other project is kept as a component");
+        assertGraphInvariants(merged);
+        String x = merged.getComponents().stream().filter(c -> "x".equals(c.getName())).findFirst()
+                .orElseThrow().getBomRef();
+        // the GAV-only metadata.component is the anchor: its orphans hang under it, not under the root
+        assertPath(merged, ROOT, x, refByPurl(merged, A), refByPurl(merged, B));
+    }
+
+    @Test
+    void projectSbomOfUnknownOriginIsNotTreatedAsTheRoot() throws Exception {
+        Bom own = rawBom("{\"component\":{\"type\":\"application\",\"name\":\"root\"}}",
+                Arrays.asList(comp("a", A)), Collections.emptyList());
+        Bom merged = mergeOwned(List.of(own), Collections.singletonList(null));
+
+        assertTrue(hasComponentNamed(merged, "root"), "a null owner is not authoritative: no alias to the root");
+        assertReferentialIntegrity(merged);
+    }
+
     private Bom fixture(String name) throws Exception {
         try (InputStream in = SbomMergerProvenanceTest.class.getResourceAsStream("merger/" + name)) {
             assertNotNull(in, "Missing test resource merger/" + name);

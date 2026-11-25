@@ -514,9 +514,10 @@ class SbomMergerScanInputTest {
     }
 
     @Test
-    void ownerThatResolvesToTheRootIsIgnored() {
-        // the plugin records null for the project's own SBOM; an owner that resolves to the root must not turn
-        // the file into a Maven authority either (SbomMerger: "!owner.equals(rootRef)")
+    void ownerEqualToTheRootMarksTheProjectsOwnMavenSbom() {
+        // R13: the plugin passes the root purl as the owner of the project's own SBOM, so an input owned by the
+        // root is the project's Maven SBOM and is authoritative for the dependsOn of what it describes; a scan's
+        // guessed edge for such a component is ignored
         Bom lib = bomOf(component(JACKSON_MAVEN, "jackson-databind", "2.17.0", JACKSON_MAVEN));
         lib.setDependencies(new ArrayList<>(Arrays.asList(new Dependency(JACKSON_MAVEN))));
         Bom bom = SbomMerger.merge("com.acme", "root", "1.0.0", "1.5",
@@ -525,12 +526,13 @@ class SbomMergerScanInputTest {
                 new ArrayList<>(Arrays.asList(scanClaimingJarDependency())), new ArrayList<>(), null, true);
         String rootRef = bom.getMetadata().getComponent().getBomRef();
         Component jackson = byName(bom, "jackson-databind").get(0);
-        Component z = byPurl(bom, "pkg:generic/z@1");
 
+        assertEquals("pkg:maven/com.acme/root@1.0.0", rootRef);
         assertTrue(reachableFromRoot(bom).contains(jackson.getBomRef()), "jackson stays reachable from the root");
-        assertEquals(Set.of(z.getBomRef()), childrenOf(bom, jackson.getBomRef()),
-                "an owner equal to the root is not a Maven authority, so the scan's edge is kept");
-        assertFalse(isInferred(z), "the scan's own edge is not an inferred link");
+        assertTrue(childrenOf(bom, jackson.getBomRef()).isEmpty(),
+                "the project's own Maven SBOM describes jackson without dependencies, so the scan's edge is ignored");
+        assertTrue(byName(bom, "root").stream().noneMatch(c -> !rootRef.equals(c.getBomRef())),
+                "no stray component for the project");
     }
 
     @Test
