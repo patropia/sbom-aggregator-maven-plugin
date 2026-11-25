@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A dependency without an SBOM (`failOnMissingSbom=false`) is now wired as a direct child of the root only when it is
+  not otherwise reachable. A transitive dependency that an upstream SBOM already lists (e.g. `root -> A -> B -> C`
+  with C missing) keeps its real parent instead of also becoming a direct dependency of the project, so the root's
+  `dependsOn` in the output may list fewer entries than before.
+- Upstream SBOM roots are wired to the root with a single reachability pass instead of one per upstream SBOM.
+
+### Fixed
+
+- A missing dependency that another input already describes as a component now carries the
+  `sbomAggregator:missingSbom=true` property; previously only newly created placeholders were marked.
+
 ## [1.4.0] - 2026-11-24
 
 ### Added

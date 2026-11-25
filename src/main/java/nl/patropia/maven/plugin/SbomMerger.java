@@ -77,7 +77,7 @@ import org.cyclonedx.model.OrganizationalEntity;
  *       dependency entries are preserved.</li>
  *   <li><b>Root dependencies:</b> the root depends only on its direct dependencies: the
  *       {@code metadata.component} of every upstream SBOM plus one placeholder per missing
- *       dependency. When the project's own SBOM is among the inputs its children are used as the
+ *       dependency that is not otherwise reachable. When the project's own SBOM is among the inputs its children are used as the
  *       root's direct dependencies instead.</li>
  *   <li><b>Root wiring with the project's own SBOM:</b> when the project's own SBOM is merged together
  *       with other SBOMs (for example a container or file-system scan), every upstream
@@ -104,7 +104,11 @@ import org.cyclonedx.model.OrganizationalEntity;
  *       are then anchored under that dependency instead of the root, and the input counts as a Maven SBOM.</li>
  *   <li><b>Missing dependencies:</b> each {@link MissingDependency} without an upstream SBOM is
  *       emitted as a {@code LIBRARY} placeholder whose bom-ref and purl are
- *       {@code pkg:maven/groupId/artifactId@version}, and is wired as a child of the root.</li>
+ *       {@code pkg:maven/groupId/artifactId@version}. Placeholders are wired to the root only when not
+ *       otherwise reachable: a missing dependency that an upstream SBOM already lists as a child of
+ *       another component keeps that parent and is not also made a direct dependency of the root. When
+ *       the missing dependency is already described as a component by another input, that component
+ *       gets the {@code sbomAggregator:missingSbom=true} marker instead of a separate placeholder.</li>
  *   <li><b>Dangling/self references:</b> references that cannot be resolved to a known component
  *       and self-loops are dropped.</li>
  *   <li><b>Document identity:</b> the aggregated BOM gets a fresh {@code urn:uuid} serial number, a
@@ -488,15 +492,16 @@ public final class SbomMerger {
         if (sawOwnBom && !ownBomChildren.isEmpty()) {
             rootChildren.addAll(ownBomChildren);
             graph.put(rootRef, rootChildren);
+            Set<String> reachedFromRoot = reachable(graph, rootRef);
             for (String upstreamRoot : upstreamRoots) {
-                if (!reachable(graph, rootRef).contains(upstreamRoot)) {
+                if (!reachedFromRoot.contains(upstreamRoot)) {
                     rootChildren.add(upstreamRoot);
+                    reachedFromRoot.addAll(reachable(graph, upstreamRoot));
                 }
             }
         } else {
             rootChildren.addAll(upstreamRoots);
         }
-        rootChildren.addAll(placeholderRefs);
         rootChildren.remove(rootRef);
 
         Set<String> rootEntry = new LinkedHashSet<>(rootChildren);
@@ -520,6 +525,18 @@ public final class SbomMerger {
             }
             if (anchorOrphans(graph, rootRef, anchor, candidates, state.merged) && !anchor.equals(rootRef)) {
                 inferredAnchors.add(anchor);
+            }
+        }
+
+        // 4c. placeholders are wired to the root only when not otherwise reachable: a dependency without an
+        // SBOM that an upstream SBOM already lists (e.g. root -> A -> B -> C with C missing) keeps its real
+        // parent and is not flattened into a direct dependency of the project
+        Set<String> rootDirect = graph.get(rootRef);
+        Set<String> reachedFromRoot = reachable(graph, rootRef);
+        for (String placeholderRef : placeholderRefs) {
+            if (!placeholderRef.equals(rootRef) && !reachedFromRoot.contains(placeholderRef)) {
+                rootDirect.add(placeholderRef);
+                reachedFromRoot.addAll(reachable(graph, placeholderRef));
             }
         }
 
@@ -1082,6 +1099,18 @@ public final class SbomMerger {
                 existing = gavIndex.get(gav);
             }
             if (existing != null) {
+                // the dependency is described by another input, but its own SBOM is still missing
+                Component component = merged.get(existing);
+                if (component != null) {
+                    List<Property> properties = component.getProperties() == null
+                            ? new ArrayList<>() : new ArrayList<>(component.getProperties());
+                    boolean marked = properties.stream()
+                            .anyMatch(p -> p != null && PROPERTY_MISSING_SBOM.equals(p.getName()));
+                    if (!marked) {
+                        properties.add(new Property(PROPERTY_MISSING_SBOM, "true"));
+                        component.setProperties(properties);
+                    }
+                }
                 return existing;
             }
 
